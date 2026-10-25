@@ -12,5 +12,7 @@ pandas>=2.0
 matplotlib>=3.7
 seaborn>=0.13
 
-# optional: play Crafter yourself with  python -m crafter.run_gui
-pygame>=2.5
+# optional, to play Crafter yourself (python -m crafter.run_gui):
+#   pip install pygame-ce
+# pygame-ce is a drop-in fork of pygame with wheels for recent Python versions;
+# the original pygame has none for Python 3.14 and fails to build on Windows.

@@ -68,7 +68,7 @@ python train_dqn.py --agent ddqn --steps 1000000 --eval-interval 50000 --logdir 
 .\scripts\run_seeds.ps1 -Runs 3 -Steps 1000000 -EvalInterval 50000
 ```
 
-Jouer soi-même (utile pour comprendre le jeu) : `python -m crafter.run_gui`.
+Jouer soi-même (utile pour comprendre le jeu) : `pip install pygame-ce` une fois, puis `python -m crafter.run_gui`.
 
 Résultats et graphiques :
 
