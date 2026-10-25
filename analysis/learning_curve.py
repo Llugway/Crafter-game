@@ -51,10 +51,11 @@ if __name__ == "__main__":
     pa.add_argument("--window", type=int, default=50_000)
     pa.add_argument("--budget", type=int, default=1_000_000)
     pa.add_argument("--out", default="analysis/learning_curve.png")
+    pa.add_argument("--rollout", type=int, default=2048, help="Transitions per PPO update (x axis of the entropy plot).")
     cfg = pa.parse_args()
     labels = cfg.labels or [pathlib.Path(d).name for d in cfg.logdir]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
     for d, label in zip(cfg.logdir, labels):
         files = sorted(pathlib.Path(d).glob("**/stats.jsonl"))
         runs = [windows(load_run(f), cfg.window, cfg.budget) for f in files]
@@ -83,6 +84,23 @@ if __name__ == "__main__":
             ax.set_title(title)
             ax.set_xlabel("training steps")
             ax.grid(alpha=0.3)
+        # policy entropy per PPO update (entropy_log.txt), if the runs logged it
+        ent = [np.loadtxt(f.parent / "entropy_log.txt", ndmin=1) for f in files if (f.parent / "entropy_log.txt").exists()]
+        ent = [e for e in ent if len(e)]
+        if ent:
+            m = min(len(e) for e in ent)
+            e = np.array([x[:m] for x in ent])
+            xs = np.arange(1, m + 1) * cfg.rollout
+            line, = axes[3].plot(xs, e.mean(0), label=label)
+            if len(ent) > 1:
+                axes[3].fill_between(xs, e.min(0), e.max(0), alpha=0.2, color=line.get_color())
+            print(f"policy entropy (max ln17 = 2.83): start {e.mean(0)[0]:.2f}, "
+                  + ", ".join(f"{int(k)//1000}k {e.mean(0)[min(m - 1, int(k // cfg.rollout))]:.2f}"
+                              for k in (100_000, 300_000, 500_000, 1_000_000) if k // cfg.rollout < m + 1))
+    axes[3].axhline(np.log(17), color="grey", ls="--", lw=1)
+    axes[3].set_title("Policy entropy (dashed: uniform = ln 17)")
+    axes[3].set_xlabel("training steps")
+    axes[3].grid(alpha=0.3)
     axes[0].legend()
     fig.tight_layout()
     pathlib.Path(cfg.out).parent.mkdir(parents=True, exist_ok=True)
