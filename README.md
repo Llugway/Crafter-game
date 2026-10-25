@@ -75,6 +75,9 @@ scripts\run_seeds.bat -Runs 3 -Steps 1000000 -EvalInterval 50000     # from cmd 
 
 ```powershell
 python train_ppo.py --num-envs 16 --num-workers 8 --steps 1000000 --eval-interval 50000 --logdir logdir/ppo_vec16/1
+
+# 3 runs of it at once, workers shared out over the CPU automatically -> logdir/ppo_vec16/1..3
+scripts\run_seeds.bat -NumEnvs 16 -Runs 3 -Steps 1000000 -EvalInterval 50000
 ```
 
 `--num-envs N` runs N Crafter environments in `--num-workers` processes (`src/vec_env.py`) and picks
