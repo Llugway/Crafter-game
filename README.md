@@ -74,6 +74,7 @@ Résultats et graphiques :
 
 ```powershell
 python analysis/crafter_score.py --logdir logdir --budget 1000000 --rates
+python analysis/learning_curve.py --logdir logdir/ppo_agent               # score / reward / durée par fenêtre de 50k pas
 python analysis/plot_eval_performance.py --logdir logdir/ppo_agent      # → analysis/ppo_agent/*.png
 ```
 
@@ -114,7 +115,7 @@ Chaque run écrit dans son dossier `logdir/<agent>/<n>/` :
 - `eval_stats.pkl` : reward moyen des évaluations ;
 - les losses.
 
-PPO sauvegarde aussi ses réseaux dans `checkpoints/ppo/`.
+PPO sauvegarde aussi ses réseaux en fin de run dans `logdir/<agent>/<n>/checkpoints/`.
 
 **Mémoire** : DQN et DDQN réservent un replay buffer de 100 000 transitions × 2 × (4×64×64)
 float32, soit environ **13 Go de RAM**. Réduisez `MAX_MEMORY` dans `train_dqn.py` si besoin.

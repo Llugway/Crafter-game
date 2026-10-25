@@ -166,7 +166,7 @@ dans [0,8 ; 1,2].
   d'entropie** (le commentaire `# Entropy ?` est resté).
 - **Gradients** : écrêtés à une norme de 0,5 pour chacun des deux réseaux.
 - **Actions** : toujours tirées au hasard selon π, y compris en évaluation.
-- **Sauvegarde** : à la toute fin seulement, dans `checkpoints/ppo/`.
+- **Sauvegarde** : à la toute fin seulement. En 2022 dans `checkpoints/ppo/` ; désormais dans `logdir/.../checkpoints/`, pour que des runs en parallèle ne s'écrasent pas.
 
 **Ce qui pose problème.**
 - **Sans bonus d'entropie**, la politique devient vite presque déterministe et cesse d'explorer.
@@ -191,7 +191,7 @@ progression ici : le PPO publié avec Crafter fait 4,6 %, et un PPO bien réglé
 | `.../eval_stats.pkl` | `eval()` | reward moyen de chaque évaluation (pickles empilés) |
 | `.../loss_log.txt`, `q_values_log.txt` | DQN/DDQN | une valeur par mise à jour (fichiers énormes : environ 1M de lignes) |
 | `.../actor_/critic_/total_losses_log.txt` | PPO | une valeur par rollout |
-| `checkpoints/ppo/actor_torch_ppo`, `critic_torch_ppo` | PPO | poids des réseaux en fin d'entraînement |
+| `.../checkpoints/actor_torch_ppo`, `critic_torch_ppo` | PPO | poids des réseaux en fin d'entraînement |
 
 - `analysis/crafter_score.py` : score Crafter officiel et taux par succès, à partir des
   `stats.jsonl`. Les scores du README en viennent.

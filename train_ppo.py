@@ -87,7 +87,9 @@ def main(opt):
     nb_rollouts = 2048
 
     # agent = RandomAgent(env.action_space.n)
-    agent = PPO_Agent(n_actions=env.action_space.n, input_dims=[4, 64, 64], n_rollouts=nb_rollouts)
+    # checkpoints go inside the run folder, so parallel runs do not overwrite each other
+    agent = PPO_Agent(n_actions=env.action_space.n, input_dims=[4, 64, 64], n_rollouts=nb_rollouts,
+                      chkpt_dir=opt.logdir + "/checkpoints")
 
     actor_losses_log = []
     critic_losses_log = []

@@ -8,7 +8,8 @@ from memories.ppo_memory import PPOMemory
 
 class PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.99, lr=0.0003, gae_lambda=0.95,
-                 policy_clip=0.2, batch_size=64, n_epochs=10, n_rollouts=2048, max_grad_norm=0.5):
+                 policy_clip=0.2, batch_size=64, n_epochs=10, n_rollouts=2048, max_grad_norm=0.5,
+                 chkpt_dir='checkpoints/ppo'):
         self.gamma = gamma
         self.policy_clip = policy_clip
         self.n_epochs = n_epochs
@@ -16,8 +17,8 @@ class PPO_Agent:
         self.max_grad_norm = max_grad_norm
 
         # Actor/Critic policies
-        self.actor = ActorNetwork(n_actions, input_dims, lr)
-        self.critic = CriticNetwork(input_dims, lr)
+        self.actor = ActorNetwork(n_actions, input_dims, lr, chkpt_dir=chkpt_dir)
+        self.critic = CriticNetwork(input_dims, lr, chkpt_dir=chkpt_dir)
 
         # Memory for each rollout
         self.memory = PPOMemory(batch_size, input_dims, n_rollouts)
