@@ -18,9 +18,12 @@ class DeepQNetwork(nn.Module):
         self.fc2 = nn.Linear(512, self.n_actions)
 
 
-        # self.optimizer = optim.RMSprop(self.parameters(), lr=lr)
+        # Both were commented out in the uploaded code, but the agents use them
+        # (DQN: self.Q_eval.optimizer / .loss, DDQN: self.Q1.optimizer).
+        # Restored as they were written, so the 2022 behaviour is kept.
+        self.optimizer = optim.RMSprop(self.parameters(), lr=lr)
 
-        # self.loss = nn.SmoothL1Loss()
+        self.loss = nn.SmoothL1Loss()
 
 
     def forward(self, x):
