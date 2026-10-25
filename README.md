@@ -65,7 +65,8 @@ python train_dqn.py --agent dqn  --steps 1000000 --eval-interval 50000 --logdir 
 python train_dqn.py --agent ddqn --steps 1000000 --eval-interval 50000 --logdir logdir/ddqn_agent/1
 
 # plusieurs runs en parallèle (une fenêtre par run)
-.\scripts\run_seeds.ps1 -Runs 3 -Steps 1000000 -EvalInterval 50000
+scripts\run_seeds.bat -Runs 3 -Steps 1000000 -EvalInterval 50000     # depuis cmd / Anaconda Prompt
+.\scripts\run_seeds.ps1 -Runs 3 -Steps 1000000 -EvalInterval 50000    # depuis PowerShell
 ```
 
 Jouer soi-même (utile pour comprendre le jeu) : `pip install pygame-ce` une fois, puis `python -m crafter.run_gui`.
