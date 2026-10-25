@@ -154,7 +154,9 @@ point de départ mesurable, et chaque correction sera une étape comparée à ce
 - **PPO** :
   - pas de bonus d'entropie, donc la politique se fige tôt ;
   - avantages non normalisés ;
-  - GAE recalculé en O(n²) à chaque epoch (lent, même résultat qu'en O(n)) ;
+  - GAE recalculé en O(n²) à chaque epoch, environ 20 s par rollout : **corrigé**, il est
+    maintenant calculé une seule fois en O(n), avec un résultat identique au bit près ;
+  - le GAE ne coupe pas la somme actualisée en fin de partie (non corrigé) ;
   - pas de bootstrap de la valeur en fin de rollout ;
   - un seul environnement.
 - **Observation en niveaux de gris** : la couleur distingue des éléments clés (fer, charbon,

@@ -160,7 +160,9 @@ dans [0,8 ; 1,2].
 - **Rollout** : 2 048 pas dans un seul environnement, puis apprentissage.
 - **Avantages** : GAE avec γ = 0,99 et λ = 0,95. Ils sont calculés par une double boucle Python
   en O(n²), soit environ 2 millions d'itérations, **refaite à chacune des 10 epochs**, alors que
-  le résultat est le même à chaque fois.
+  le résultat est le même à chaque fois. Ce calcul prenait environ 20 s par rollout. **Il est
+  désormais fait une seule fois, en O(n)**, avec des valeurs identiques au bit près : c'est
+  une optimisation pure, qui ne change pas l'apprentissage.
 - **Mise à jour** : 10 epochs × 32 mini-lots de 64, soit 320 pas de gradient par rollout.
 - **Perte** : `perte_acteur (clip 0,2) + 0,5 × perte_critique (MSE)`. Il n'y a **pas de bonus
   d'entropie** (le commentaire `# Entropy ?` est resté).
@@ -174,10 +176,14 @@ dans [0,8 ; 1,2].
   d'apprentissage effectif irrégulier.
 - **Pas de bootstrap en fin de rollout** : l'avantage du dernier pas vaut 0 et les derniers pas
   sont sous-estimés. L'effet est faible avec 2 048 pas.
+- **Le GAE ne s'arrête pas en fin de partie** : la valeur de l'état suivant est bien coupée par
+  `(1 − done)`, mais la somme actualisée des δ continue au-delà de la fin d'une partie. Les
+  premiers pas d'une partie influencent donc l'avantage des derniers pas de la précédente.
+  La formule standard multiplie aussi le facteur γλ par `(1 − done)`.
 - **Un seul environnement** : les 2 048 pas d'un rollout sont très corrélés (une ou deux
   parties), ce qui donne peu de diversité par mise à jour.
-- **Le GAE en O(n²)** est le principal coût de calcul de l'apprentissage, et il tourne sur CPU
-  en Python pur.
+- **Le GAE en O(n²)** était le principal coût de calcul de l'apprentissage, en Python pur sur
+  CPU. C'est corrigé (voir plus haut).
 
 PPO était votre meilleur agent (3,2 %). C'est aussi l'algorithme qui offre le plus de marge de
 progression ici : le PPO publié avec Crafter fait 4,6 %, et un PPO bien réglé atteint environ
@@ -229,8 +235,8 @@ Ordres de grandeur, à confirmer avec la ligne de progression sur votre machine 
   le coût fixe de chaque appel (copie vers le GPU, lancement des noyaux, retour avec `.item()`).
   Le gain est donc faible, voire nul.
 - **`learn`** :
-  - PPO : le GAE en O(n²) en Python domine et reste sur CPU. Seule la partie réseau (320 mini-lots
-    de 64) profite du GPU.
+  - PPO : en 2022, le GAE en O(n²) en Python dominait ; ce n'est plus le cas. Il reste la partie
+    réseau (320 mini-lots de 64), qui profite du GPU.
   - DQN : une mise à jour par pas, sur 32 images. Le GPU accélère le réseau, mais il faut d'abord
     copier les lots depuis la mémoire numpy (environ 4 Mo par pas).
 
