@@ -8,6 +8,9 @@ from pathlib import Path
 # are therefore done only in the main process; workers only need Crafter (see src/vec_env.py).
 if __name__ == "__main__":
     import torch
+    # cuDNN benchmarks its convolution algorithms once per input shape and keeps the fastest.
+    # Pure speed: the shapes here never change (batches of 1, N and 64), the maths is the same.
+    torch.backends.cudnn.benchmark = True
     from agents.ppo_agent import PPO_Agent
     from src.crafter_wrapper import Env
     from src.progress import Progress
