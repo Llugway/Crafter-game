@@ -1,105 +1,107 @@
-# Crafter — agents d'apprentissage par renforcement
+# Crafter — reinforcement learning agents
 
-Agents DQN, Double DQN et PPO entraînés sur [Crafter](https://github.com/danijar/crafter), un
-Minecraft 2D conçu comme benchmark : l'agent doit survivre (manger, boire, dormir, se défendre) et
-enchaîner 22 succès de difficulté croissante (bois → établi → pioche → pierre → fer → diamant).
+DQN, Double DQN and PPO agents trained on [Crafter](https://github.com/danijar/crafter), a 2D
+Minecraft built as a benchmark: the agent must survive (eat, drink, sleep, fight) and chain 22
+achievements of increasing difficulty (wood → table → pickaxe → stone → iron → diamond).
 
-Le projet est parti d'un devoir de master en IA (2022). L'objectif est maintenant de l'améliorer
-**pas à pas**, en comprenant à chaque étape ce qui change et pourquoi.
+The project started as a master's assignment in AI (2022). The goal now is to improve it
+**step by step**, understanding at each step what changes and why.
 
-## Point de départ (2022)
+## Starting point (2022)
 
-Score Crafter : moyenne géométrique des taux de réussite des 22 succès, sur tous les épisodes
-d'entraînement du premier million de pas. Calculé par `analysis/crafter_score.py` sur les runs
-de `results/2022/runs/`.
+Crafter score: geometric mean of the success rates of the 22 achievements, over all training
+episodes of the first million steps. Computed by `analysis/crafter_score.py` on the runs in
+`results/2022/runs/`.
 
-| Agent | Runs | Score Crafter | Reward moyen (100 derniers épisodes) |
+| Agent | Runs | Crafter score | Mean reward (last 100 episodes) |
 |---|---|---|---|
-| Aléatoire | 4 | 1,6 % | 1,4 |
-| DQN | 2 (≤ 600k pas) | 2,2 – 2,3 % | 2,6 – 2,8 |
-| Double DQN | 2 | 2,6 – 2,7 % | 2,7 – 3,1 |
-| **PPO** | 4 | **2,6 – 3,2 %** | 2,4 – 3,2 |
-| *Références publiées (pixels, 1M pas)* | | PPO 4,6 % · DreamerV3 14,8 % · humain 50,5 % | |
+| Random | 4 | 1.6% | 1.4 |
+| DQN | 2 (≤ 600k steps) | 2.2 – 2.3% | 2.6 – 2.8 |
+| Double DQN | 2 | 2.6 – 2.7% | 2.7 – 3.1 |
+| **PPO** | 4 | **2.6 – 3.2%** | 2.4 – 3.2 |
+| *Published references (pixels, 1M steps)* | | PPO 4.6% · DreamerV3 14.8% · human 50.5% | |
 
-Le meilleur run PPO coupe du bois (59 % des parties) et pose un établi (31 %), mais ne fabrique
-presque jamais d'outils (5 %) et n'atteint pas la pierre.
+The best PPO run collects wood (59% of episodes) and places a table (31%), but almost never
+crafts tools (5%) and does not reach stone.
 
 ## Installation (Windows, conda)
 
-Le code tourne nativement sous Windows : pas besoin de Linux ni de WSL pour l'instant.
+The code runs natively on Windows: no Linux or WSL needed.
 
 ```powershell
-conda activate crafterEnv          # environnement existant ; sinon : conda create -n crafterEnv python=3.11
+conda activate crafterEnv          # existing env; otherwise: conda create -n crafterEnv python=3.12
 cd Crafter-game
 
-# 1) PyTorch avec CUDA (build CUDA 13.0 : `nvidia-smi` doit afficher une version CUDA ≥ 13.0). Vérifiez la commande exacte sur
-#    https://pytorch.org/get-started/locally/ (Windows / Pip / CUDA le plus récent).
+# 1) PyTorch with CUDA (CUDA 13.0 build: `nvidia-smi` must report CUDA >= 13.0).
+#    Check the exact command at https://pytorch.org/get-started/locally/ (Windows / Pip / latest CUDA).
 pip install torch --index-url https://download.pytorch.org/whl/cu130
 
-# 2) Le reste
+# 2) Everything else
 pip install -r requirements.txt
 
-# 3) Vérifications
+# 3) Checks
 python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 python -c "import crafter; e = crafter.Env(); print(e.reset().shape)"
 ```
 
-La première commande de vérification doit afficher `True` et `NVIDIA GeForce RTX 4090`. Si elle
-affiche `False`, c'est la version CPU de PyTorch qui est installée : désinstallez-la
-(`pip uninstall torch`) puis relancez l'étape 1.
+The first check must print `True` and the GPU name. If it prints `False`, the CPU build of
+PyTorch is installed: uninstall it (`pip uninstall torch`) and redo step 1.
 
-## Lancer le code
+`numba` (in `requirements.txt`) is used automatically by `opensimplex`: Crafter's world
+generation becomes about 16× faster (0.82 s → 0.05 s per world) and produces identical worlds.
 
-Tests rapides (une à deux minutes chacun) pour vérifier que tout fonctionne :
+## Running the code
+
+Quick tests (one to two minutes each) to check that everything works:
 
 ```powershell
 python train_ppo.py --steps 4096 --eval-interval 4096 --eval-episodes 2 --logdir logdir/smoke/ppo/0
 python train_dqn.py --agent ddqn --steps 3000 --eval-interval 3000 --eval-episodes 2 --logdir logdir/smoke/ddqn/0
 ```
 
-Entraînements complets (1M pas, comme le benchmark) :
+Full training runs (1M steps, as in the benchmark):
 
 ```powershell
 python train_ppo.py --steps 1000000 --eval-interval 50000 --logdir logdir/ppo_agent/1
 python train_dqn.py --agent dqn  --steps 1000000 --eval-interval 50000 --logdir logdir/dqn_agent/1
 python train_dqn.py --agent ddqn --steps 1000000 --eval-interval 50000 --logdir logdir/ddqn_agent/1
 
-# plusieurs runs en parallèle (une fenêtre par run)
-scripts\run_seeds.bat -Runs 3 -Steps 1000000 -EvalInterval 50000     # depuis cmd / Anaconda Prompt
-.\scripts\run_seeds.ps1 -Runs 3 -Steps 1000000 -EvalInterval 50000    # depuis PowerShell
+# several runs in parallel (one window per run)
+scripts\run_seeds.bat -Runs 3 -Steps 1000000 -EvalInterval 50000     # from cmd / Anaconda Prompt
+.\scripts\run_seeds.ps1 -Runs 3 -Steps 1000000 -EvalInterval 50000    # from PowerShell
 ```
 
-Jouer soi-même (utile pour comprendre le jeu) : `pip install pygame-ce` une fois, puis `python -m crafter.run_gui`.
+Play the game yourself (useful to understand it): `pip install pygame-ce` once, then
+`python -m crafter.run_gui`.
 
-Résultats et graphiques :
+Results and plots:
 
 ```powershell
 python analysis/crafter_score.py --logdir logdir --budget 1000000 --rates
-python analysis/learning_curve.py --logdir logdir/ppo_agent               # score / reward / durée par fenêtre de 50k pas
-python analysis/plot_eval_performance.py --logdir logdir/ppo_agent      # → analysis/ppo_agent/*.png
+python analysis/learning_curve.py --logdir logdir/ppo_agent               # score / reward / length per 50k-step window
+python analysis/plot_eval_performance.py --logdir logdir/ppo_agent      # -> analysis/ppo_agent/*.png
 ```
 
-Pendant l'entraînement, une ligne de progression s'affiche tous les 5 000 pas
-(`--log-every`) :
+During training, a progress line is printed every 5,000 steps (`--log-every`):
 
 ```
-[  120000/1000000  12.0%]   341 pas/s | 5m52s écoulé, reste ~43m | 652 épisodes | reward (20 dern.) 2.45 | act 21% env 48% eval 0% learn 31% | cuda:0
+[  120000/1000000  12.0%]   341 steps/s | 5m52s elapsed, ~43m left | 652 episodes | reward (last 20) 2.45 | act 21% env 48% eval 0% learn 31% | cuda:0
 ```
 
-Les pourcentages indiquent où part le temps depuis la ligne précédente :
-- `env` : simulation et rendu Crafter, sur CPU ;
-- `act` : choix de l'action par le réseau ;
-- `learn` : apprentissage ;
-- `eval` : évaluation ;
-- `replay` (DQN) : écriture dans la mémoire de replay.
+The percentages show where the time went since the previous line:
+- `env`: Crafter simulation and rendering, on CPU;
+- `act`: action selection by the network;
+- `learn`: learning updates;
+- `eval`: evaluation;
+- `replay` (DQN): writing to the replay memory.
 
-Un résumé s'affiche à la fin du run.
+A summary is printed at the end of the run. The original "Train mean_reward" line (every 20
+episodes) is kept; `--log-episodes 0` hides it.
 
-### Mesurer le gain du GPU
+### Measuring the GPU speed-up
 
-On lance le même entraînement court deux fois, sur GPU puis sur CPU (la variable
-`CUDA_VISIBLE_DEVICES` cache le GPU à PyTorch), et on compare les pas/s et la répartition
-du temps :
+Run the same short training twice, on GPU then on CPU (`CUDA_VISIBLE_DEVICES` hides the GPU from
+PyTorch), and compare steps/s and the time split:
 
 ```powershell
 python train_ppo.py --steps 50000 --eval-interval 1000000 --logdir logdir/bench/ppo_gpu/0
@@ -108,61 +110,62 @@ python train_ppo.py --steps 50000 --eval-interval 1000000 --logdir logdir/bench/
 Remove-Item Env:CUDA_VISIBLE_DEVICES
 ```
 
-Même chose avec `train_dqn.py --agent dqn`. La dernière colonne de la ligne de progression
-confirme le device utilisé (`cuda:0` ou `cpu`).
+The last column of the progress line confirms the device used (`cuda:0` or `cpu`).
 
-Chaque run écrit dans son dossier `logdir/<agent>/<n>/` :
-- `stats.jsonl` : une ligne par épisode d'entraînement (durée, reward, succès) ;
-- `eval_stats.pkl` : reward moyen des évaluations ;
-- les losses.
+### Output files
 
-PPO sauvegarde aussi ses réseaux en fin de run dans `logdir/<agent>/<n>/checkpoints/`.
+Each run writes to its own folder `logdir/<agent>/<n>/`:
+- `stats.jsonl`: one line per training episode (length, reward, achievements);
+- `eval_stats.pkl`: mean reward of each evaluation;
+- the loss logs;
+- `checkpoints/` (PPO): network weights at the end of the run.
 
-**Mémoire** : DQN et DDQN réservent un replay buffer de 100 000 transitions × 2 × (4×64×64)
-float32, soit environ **13 Go de RAM**. Réduisez `MAX_MEMORY` dans `train_dqn.py` si besoin.
+**Memory**: DQN and DDQN allocate a replay buffer of 100,000 transitions × 2 × (4×64×64)
+float32, about **13 GB of RAM**. Lower `MAX_MEMORY` in `train_dqn.py` if needed.
 
-## Organisation
+## Repository layout
 
 ```
-train_ppo.py            boucle d'entraînement PPO        (ex-train.py)
-train_dqn.py            boucle DQN / Double DQN (--agent) (ex-train_classic.py)
+train_ppo.py            PPO training loop                    (formerly train.py)
+train_dqn.py            DQN / Double DQN training loop (--agent) (formerly train_classic.py)
 agents/                 dqn_agent, ddqn_agent, ppo_agent, random_agent
-networks/               réseaux convolutifs (Q-network, acteur, critique)
-memories/ppo_memory.py  buffer de rollout PPO
-src/crafter_wrapper.py  wrapper Crafter : niveaux de gris, empilement de 4 images, logs
-analysis/               crafter_score.py (score officiel), plot_eval_performance.py (courbes)
-scripts/run_seeds.ps1   lancer plusieurs runs en parallèle
-results/2022/           runs, checkpoints PPO et graphiques du devoir d'origine
-docs/                   énoncé du devoir, règles, articles de référence
+networks/               convolutional networks (Q-network, actor, critic)
+memories/ppo_memory.py  PPO rollout buffer
+src/crafter_wrapper.py  Crafter wrapper: grayscale, 4-frame stack, logging
+src/progress.py         progress line and time split
+analysis/               crafter_score.py, learning_curve.py, plot_eval_performance.py
+scripts/                run_seeds.ps1 / run_seeds.bat: several runs in parallel
+results/2022/           runs, PPO checkpoints and plots of the original assignment
+docs/                   assignment, rules, reference papers, detailed project description
 ```
 
-Le fonctionnement détaillé du code (jeu, pipeline, réseaux, chaque agent, résultats, temps de
-calcul) est décrit dans [docs/projet_etat_0.md](docs/projet_etat_0.md).
+How the code works in detail (game, pipeline, networks, each agent, results, compute time):
+[docs/state_0.md](docs/state_0.md).
 
-## Limites connues du code de 2022 (pistes de la prochaine étape)
+## Known limitations of the 2022 code (next steps)
 
-Constatées à la relecture, **pas encore corrigées**, volontairement : le code actuel reste le
-point de départ mesurable, et chaque correction sera une étape comparée à celui-ci.
+Found while reviewing the code and **deliberately not fixed yet**: the current code remains the
+measurable starting point, and each fix will be a step compared against it.
 
-- **Double DQN, cible inversée** (`agents/ddqn_agent.py`) : `q_target = r + γ·max Q'(s') · done`
-  au lieu de `· (1 − done)`. La valeur future n'est comptée qu'en fin d'épisode, donc l'agent
-  n'apprend pratiquement que la récompense immédiate.
-- **Pas de vrai réseau cible** : en DDQN, Q2 est recopié sur Q1 à chaque pas ; DQN n'en a pas.
-  L'apprentissage est donc instable.
-- **Exploration DQN** : `EPSILON_DECAY` n'est pas transmis à l'agent. ε passe de 1 à 0,1 en
-  environ 1 800 pas au lieu d'environ 900 000.
-- **PPO** :
-  - pas de bonus d'entropie, donc la politique se fige tôt ;
-  - avantages non normalisés ;
-  - GAE recalculé en O(n²) à chaque epoch, environ 20 s par rollout : **corrigé**, il est
-    maintenant calculé une seule fois en O(n), avec un résultat identique au bit près ;
-  - le GAE ne coupe pas la somme actualisée en fin de partie (non corrigé) ;
-  - pas de bootstrap de la valeur en fin de rollout ;
-  - un seul environnement.
-- **Observation en niveaux de gris** : la couleur distingue des éléments clés (fer, charbon,
-  diamant, eau…), et le passage en gris la perd.
-- **GPU sous-utilisé** : l'environnement tourne sur un seul cœur CPU, donc le GPU attend la
-  plupart du temps. La parallélisation des environnements sera l'un des premiers gains.
+- **Double DQN, inverted target** (`agents/ddqn_agent.py`): `q_target = r + γ·max Q'(s') · done`
+  instead of `· (1 − done)`. The future value is only counted at the end of an episode, so the
+  agent essentially learns the immediate reward only.
+- **No real target network**: in DDQN, Q2 is copied from Q1 at every step; DQN has none.
+  Learning is therefore unstable.
+- **DQN exploration**: `EPSILON_DECAY` is never passed to the agent. ε goes from 1 to 0.1 in
+  about 1,800 steps instead of about 900,000.
+- **PPO**:
+  - no entropy bonus, so the policy freezes early;
+  - advantages not normalised;
+  - GAE recomputed in O(n²) at every epoch, about 20 s per rollout: **fixed**, it is now
+    computed once in O(n), with bit-identical results;
+  - GAE does not stop the discounted sum at episode boundaries (not fixed);
+  - no value bootstrap at the end of a rollout;
+  - a single environment.
+- **Grayscale observations**: colour distinguishes key elements (iron, coal, diamond, water…),
+  and grayscale loses it.
+- **Under-used GPU**: the environment runs on a single CPU core, so the GPU waits most of the
+  time. Running environments in parallel will be one of the first gains.
 
-L'agent M-DQN de 2022 a été retiré : il dépendait d'une classe `ReplayBuffer` absente du dépôt.
-Il reste disponible dans l'historique git (premier commit).
+The 2022 M-DQN agent was removed: it depended on a `ReplayBuffer` class missing from the
+repository. It is still available in the git history (first commit).

@@ -10,7 +10,7 @@ Purely observational: it does not change what the agent does.
 
 Every `every` steps it prints, for example:
 
-    [ 120000/1000000  12.0%] 341 pas/s | 5m52s écoulé, reste ~43m | 652 épisodes | reward (20 dern.) 2.45 | env 48% act 21% learn 31% | cuda
+    [ 120000/1000000  12.0%] 341 steps/s | 5m52s elapsed, ~43m left | 652 episodes | reward (last 20) 2.45 | env 48% act 21% learn 31% | cuda
 """
 import time
 from collections import deque, defaultdict
@@ -69,9 +69,9 @@ class Progress:
         mean_ret = sum(self.returns) / len(self.returns) if self.returns else float("nan")
         tracked = sum(self.timers.values())
         split = " ".join(f"{k} {100 * v / tracked:.0f}%" for k, v in sorted(self.timers.items())) if tracked else ""
-        print(f"[{self.steps:>8d}/{self.total} {pct:5.1f}%] {sps:5.0f} pas/s | "
-              f"{_fmt(elapsed)} écoulé, reste ~{_fmt(remaining)} | {self.episodes} épisodes | "
-              f"reward ({self.window} dern.) {mean_ret:.2f} | {split} | {self.device}", flush=True)
+        print(f"[{self.steps:>8d}/{self.total} {pct:5.1f}%] {sps:5.0f} steps/s | "
+              f"{_fmt(elapsed)} elapsed, ~{_fmt(remaining)} left | {self.episodes} episodes | "
+              f"reward (last {self.window}) {mean_ret:.2f} | {split} | {self.device}", flush=True)
         self.t_last, self.steps_last = now, self.steps
         self.timers.clear()
 
@@ -79,5 +79,5 @@ class Progress:
         elapsed = time.perf_counter() - self.t0
         tracked = sum(self.timers_total.values()) or 1e-9
         parts = ", ".join(f"{k} {v:.0f}s ({100 * v / tracked:.0f}%)" for k, v in sorted(self.timers_total.items()))
-        print(f"Terminé : {self.steps} pas en {_fmt(elapsed)} ({self.steps / max(elapsed, 1e-9):.0f} pas/s). "
-              f"Temps mesuré : {parts}.", flush=True)
+        print(f"Done: {self.steps} steps in {_fmt(elapsed)} ({self.steps / max(elapsed, 1e-9):.0f} steps/s). "
+              f"Measured time: {parts}.", flush=True)

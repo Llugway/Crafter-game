@@ -65,8 +65,8 @@ if __name__ == "__main__":
         n = min(len(r) for r in runs)
         steps = np.array([runs[0][i]["steps"] for i in range(n)])
         names = load_run(files[0])["names"]
-        print(f"\n=== {label} : {len(runs)} run(s) — moyenne par fenêtre de {cfg.window:,} pas ===")
-        print(f"{'pas':>9s} {'score %':>8s} {'reward':>7s} {'durée':>6s}  succès en progression (taux %)")
+        print(f"\n=== {label}: {len(runs)} run(s), mean per window of {cfg.window:,} steps ===")
+        print(f"{'steps':>9s} {'score %':>8s} {'reward':>7s} {'length':>6s}  top achievements (success rate %)")
         for i in range(n):
             score = np.mean([r[i]["score"] for r in runs])
             reward = np.mean([r[i]["reward"] for r in runs])
@@ -75,16 +75,16 @@ if __name__ == "__main__":
             top = ", ".join(f"{names[j]} {rates[j]:.0f}" for j in np.argsort(-rates)[:6] if rates[j] > 0)
             print(f"{steps[i]:9d} {score:8.2f} {reward:7.2f} {length:6.0f}  {top}")
         for ax, key, title in zip(axes, ("score", "reward", "length"),
-                                  ("Score Crafter (%)", "Reward moyen par épisode", "Durée moyenne d'un épisode (pas)")):
+                                  ("Crafter score (%)", "Mean episode reward", "Mean episode length (steps)")):
             vals = np.array([[r[i][key] for i in range(n)] for r in runs])
             line, = ax.plot(steps, vals.mean(0), label=f"{label} ({len(runs)} runs)")
             if len(runs) > 1:
                 ax.fill_between(steps, vals.min(0), vals.max(0), alpha=0.2, color=line.get_color())
             ax.set_title(title)
-            ax.set_xlabel("pas d'entraînement")
+            ax.set_xlabel("training steps")
             ax.grid(alpha=0.3)
     axes[0].legend()
     fig.tight_layout()
     pathlib.Path(cfg.out).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(cfg.out, dpi=120)
-    print(f"\nFigure : {cfg.out}")
+    print(f"\nFigure: {cfg.out}")
