@@ -6,6 +6,7 @@ from agents.dqn_agent import DQN_Agent
 from agents.ddqn_agent import DDQN_Agent
 from agents.ppo_agent import PPO_Agent
 from src.crafter_wrapper import Env
+from src.progress import Progress
 
 
 def _save_stats(episodic_returns, crt_step, path):
@@ -100,27 +101,34 @@ def main(opt):
     batch_episode_reward = 0.0
     batch_episode_count = 0
 
+    progress = Progress(opt.steps, every=opt.log_every, device=agent.actor.device)
+
     while step_cnt < opt.steps or not done:
         if done:
             ep_cnt += 1
             batch_episode_count += 1
-            if batch_episode_count % display_interval == 0:
+            if opt.log_episodes and batch_episode_count % display_interval == 0:
                 print("[" + str(step_cnt) + "] Train mean_reward: " + str(
                     '%.1f' % (batch_episode_reward / batch_episode_count)))
                 batch_episode_reward = 0.0
                 batch_episode_count = 0
-            obs, done = env.reset(), False
-            obs = obs.cpu().unsqueeze(0)
+            with progress.time("env"):
+                obs, done = env.reset(), False
+                obs = obs.cpu().unsqueeze(0)
 
-        action, prob, val = agent.act(obs)
-        obs_, reward, done, info = env.step(action)
-        obs_ = obs_.cpu().unsqueeze(0)
+        with progress.time("act"):
+            action, prob, val = agent.act(obs)
+        with progress.time("env"):
+            obs_, reward, done, info = env.step(action)
+            obs_ = obs_.cpu().unsqueeze(0)
         batch_episode_reward += reward
         agent.remember(obs, action, prob, val, reward, done)
         step_cnt += 1
+        progress.step(reward, done)
 
         if step_cnt % nb_rollouts == 0:
-            agent.learn()
+            with progress.time("learn"):
+                agent.learn()
             actor_losses_log.append(agent.avg_actor_loss)
             critic_losses_log.append(agent.avg_critic_loss)
             total_losses_log.append(agent.total_loss)
@@ -129,8 +137,10 @@ def main(opt):
 
         # evaluate once in a while
         if step_cnt % opt.eval_interval == 0:
-            eval(agent, eval_env, step_cnt, opt)
+            with progress.time("eval"):
+                eval(agent, eval_env, step_cnt, opt)
 
+    progress.summary()
     print("Number of episodes : " + str(ep_cnt))
     agent.save_models()
     print("... saving logs...")
@@ -173,6 +183,19 @@ def get_options():
         default=20,
         metavar="N",
         help="Number of evaluation episodes to average over",
+    )
+    parser.add_argument(
+        "--log-every",
+        type=int,
+        default=5_000,
+        metavar="STEPS",
+        help="Print a progress line (speed, ETA, reward, time split) every N steps; 0 to disable.",
+    )
+    parser.add_argument(
+        "--log-episodes",
+        type=int,
+        default=1,
+        help="Also print the original 'Train mean_reward' line every 20 episodes (1) or not (0).",
     )
     return parser.parse_args()
 

@@ -77,6 +77,38 @@ python analysis/crafter_score.py --logdir logdir --budget 1000000 --rates
 python analysis/plot_eval_performance.py --logdir logdir/ppo_agent      # → analysis/ppo_agent/*.png
 ```
 
+Pendant l'entraînement, une ligne de progression s'affiche tous les 5 000 pas
+(`--log-every`) :
+
+```
+[  120000/1000000  12.0%]   341 pas/s | 5m52s écoulé, reste ~43m | 652 épisodes | reward (20 dern.) 2.45 | act 21% env 48% eval 0% learn 31% | cuda:0
+```
+
+Les pourcentages indiquent où part le temps depuis la ligne précédente :
+- `env` : simulation et rendu Crafter, sur CPU ;
+- `act` : choix de l'action par le réseau ;
+- `learn` : apprentissage ;
+- `eval` : évaluation ;
+- `replay` (DQN) : écriture dans la mémoire de replay.
+
+Un résumé s'affiche à la fin du run.
+
+### Mesurer le gain du GPU
+
+On lance le même entraînement court deux fois, sur GPU puis sur CPU (la variable
+`CUDA_VISIBLE_DEVICES` cache le GPU à PyTorch), et on compare les pas/s et la répartition
+du temps :
+
+```powershell
+python train_ppo.py --steps 50000 --eval-interval 1000000 --logdir logdir/bench/ppo_gpu/0
+$env:CUDA_VISIBLE_DEVICES = "-1"
+python train_ppo.py --steps 50000 --eval-interval 1000000 --logdir logdir/bench/ppo_cpu/0
+Remove-Item Env:CUDA_VISIBLE_DEVICES
+```
+
+Même chose avec `train_dqn.py --agent dqn`. La dernière colonne de la ligne de progression
+confirme le device utilisé (`cuda:0` ou `cpu`).
+
 Chaque run écrit dans son dossier `logdir/<agent>/<n>/` :
 - `stats.jsonl` : une ligne par épisode d'entraînement (durée, reward, succès) ;
 - `eval_stats.pkl` : reward moyen des évaluations ;
@@ -101,6 +133,9 @@ scripts/run_seeds.ps1   lancer plusieurs runs en parallèle
 results/2022/           runs, checkpoints PPO et graphiques du devoir d'origine
 docs/                   énoncé du devoir, règles, articles de référence
 ```
+
+Le fonctionnement détaillé du code (jeu, pipeline, réseaux, chaque agent, résultats, temps de
+calcul) est décrit dans [docs/projet_etat_0.md](docs/projet_etat_0.md).
 
 ## Limites connues du code de 2022 (pistes de la prochaine étape)
 
