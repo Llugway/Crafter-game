@@ -9,8 +9,10 @@ from memories.ppo_memory import PPOMemory
 class PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.99, lr=0.0003, gae_lambda=0.95,
                  policy_clip=0.2, batch_size=64, n_epochs=10, n_rollouts=2048, max_grad_norm=0.5,
-                 chkpt_dir='checkpoints/ppo'):
+                 chkpt_dir='checkpoints/ppo', ent_coef=0.0):
         self.gamma = gamma
+        # Weight of the entropy bonus in the loss. 0.0 = state 0 (2022 code, no bonus).
+        self.ent_coef = ent_coef
         self.policy_clip = policy_clip
         self.n_epochs = n_epochs
         self.gae_lambda = gae_lambda
@@ -27,6 +29,7 @@ class PPO_Agent:
         self.avg_critic_loss = 0
         self.avg_actor_loss = 0
         self.total_loss = 0
+        self.avg_entropy = 0
 
     def remember(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
@@ -71,6 +74,7 @@ class PPO_Agent:
 
         actor_losses = []
         critic_losses = []
+        entropies = []
 
         # Advantages (GAE). They depend only on the rollout, not on the epoch, so they are
         # computed once. The original code recomputed them at every epoch with a double loop
@@ -115,7 +119,13 @@ class PPO_Agent:
                 critic_loss = critic_loss.mean()
                 critic_losses.append(critic_loss.item())
 
-                total_loss = actor_loss + 0.5 * critic_loss  # Entropy ?
+                # Entropy of the policy on this mini-batch: high = actions spread out (exploring),
+                # low = almost always the same action. Logged in every run, used in the loss
+                # only when ent_coef > 0 (subtracted, so minimising the loss increases entropy).
+                entropy = dist.entropy().mean()
+                entropies.append(entropy.item())
+
+                total_loss = actor_loss + 0.5 * critic_loss - self.ent_coef * entropy
 
                 self.actor.optimizer.zero_grad()
                 self.critic.optimizer.zero_grad()
@@ -131,4 +141,5 @@ class PPO_Agent:
         self.avg_critic_loss = np.mean(critic_losses)
         self.avg_actor_loss = np.mean(actor_losses)
         self.total_loss = total_loss.item()
+        self.avg_entropy = np.mean(entropies)
 

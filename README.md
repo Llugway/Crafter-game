@@ -155,7 +155,8 @@ measurable starting point, and each fix will be a step compared against it.
 - **DQN exploration**: `EPSILON_DECAY` is never passed to the agent. ε goes from 1 to 0.1 in
   about 1,800 steps instead of about 900,000.
 - **PPO**:
-  - no entropy bonus, so the policy freezes early;
+  - no entropy bonus, so the policy freezes early (now available with `--ent-coef`,
+    default 0 = 2022 behaviour; the policy entropy is logged to `entropy_log.txt` in every run);
   - advantages not normalised;
   - GAE recomputed in O(n²) at every epoch, about 20 s per rollout: **fixed**, it is now
     computed once in O(n), with bit-identical results;

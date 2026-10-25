@@ -89,11 +89,12 @@ def main(opt):
     # agent = RandomAgent(env.action_space.n)
     # checkpoints go inside the run folder, so parallel runs do not overwrite each other
     agent = PPO_Agent(n_actions=env.action_space.n, input_dims=[4, 64, 64], n_rollouts=nb_rollouts,
-                      chkpt_dir=opt.logdir + "/checkpoints")
+                      chkpt_dir=opt.logdir + "/checkpoints", ent_coef=opt.ent_coef)
 
     actor_losses_log = []
     critic_losses_log = []
     total_losses_log = []
+    entropy_log = []
 
     # main loop
     ep_cnt, step_cnt, done = 0, 0, True
@@ -134,6 +135,7 @@ def main(opt):
             actor_losses_log.append(agent.avg_actor_loss)
             critic_losses_log.append(agent.avg_critic_loss)
             total_losses_log.append(agent.total_loss)
+            entropy_log.append(agent.avg_entropy)
 
         obs = obs_
 
@@ -147,6 +149,8 @@ def main(opt):
     agent.save_models()
     print("... saving logs...")
     save_training_logs(actor_losses_log, critic_losses_log, total_losses_log, opt.logdir)
+    with open(opt.logdir + '/entropy_log.txt', 'w') as fp:
+        fp.writelines("%s\n" % item for item in entropy_log)
 
 
 def get_options():
@@ -185,6 +189,12 @@ def get_options():
         default=20,
         metavar="N",
         help="Number of evaluation episodes to average over",
+    )
+    parser.add_argument(
+        "--ent-coef",
+        type=float,
+        default=0.0,
+        help="Entropy bonus weight in the PPO loss (0 = 2022 behaviour; 0.01 is the usual value).",
     )
     parser.add_argument(
         "--log-every",
