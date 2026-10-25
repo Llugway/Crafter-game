@@ -1,12 +1,16 @@
 import argparse
 import pickle
 from pathlib import Path
-import torch
-from agents.dqn_agent import DQN_Agent
-from agents.ddqn_agent import DDQN_Agent
-from agents.ppo_agent import PPO_Agent
-from src.crafter_wrapper import Env
-from src.progress import Progress
+
+# With --num-envs > 1 on Windows, each worker process re-imports this file (under the name
+# "__mp_main__"). Importing PyTorch in every worker loads the CUDA libraries again, which commits
+# several GB of memory per process and exhausts the page file (WinError 1455). The heavy imports
+# are therefore done only in the main process; workers only need Crafter (see src/vec_env.py).
+if __name__ == "__main__":
+    import torch
+    from agents.ppo_agent import PPO_Agent
+    from src.crafter_wrapper import Env
+    from src.progress import Progress
 
 
 def _save_stats(episodic_returns, crt_step, path):
