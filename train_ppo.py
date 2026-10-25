@@ -153,6 +153,98 @@ def main(opt):
         fp.writelines("%s\n" % item for item in entropy_log)
 
 
+def main_vec(opt):
+    """PPO with several environments in parallel (--num-envs N > 1).
+
+    Same agent, same update (2048 transitions, 10 epochs, mini-batches of 64). What changes is
+    how the 2048 transitions are collected: N environments x (2048 / N) steps instead of one
+    environment x 2048 steps. Actions for the N environments are chosen in a single batched
+    network pass, and the environments step in parallel worker processes.
+    """
+    import json
+    import os
+    import numpy as np
+    from src.vec_env import VecCrafter
+
+    _info(opt)
+    opt.device = torch.device("cpu")
+    os.makedirs(opt.logdir, exist_ok=True)
+
+    n_envs = opt.num_envs
+    n_steps = opt.rollout // n_envs  # steps per environment per rollout
+    assert n_steps * n_envs == opt.rollout, "--rollout must be a multiple of --num-envs"
+    print(f"{n_envs} environments in {min(opt.num_workers or n_envs, n_envs)} worker processes, "
+          f"{n_steps} steps each per rollout ({opt.rollout} transitions per update).")
+
+    venv = VecCrafter(n_envs, num_workers=opt.num_workers, history_length=opt.history_length)
+    eval_env = Env("eval", opt)
+    agent = PPO_Agent(n_actions=17, input_dims=[opt.history_length, 64, 64], n_rollouts=opt.rollout,
+                      chkpt_dir=opt.logdir + "/checkpoints", ent_coef=opt.ent_coef)
+
+    stats_file = open(opt.logdir + "/stats.jsonl", "a")  # same format as crafter.Recorder
+    actor_losses_log, critic_losses_log, total_losses_log, entropy_log = [], [], [], []
+    progress = Progress(opt.steps, every=opt.log_every, device=agent.actor.device)
+    obs = venv.observations()
+    step_cnt, ep_cnt, next_eval = 0, 0, opt.eval_interval
+    recent = []
+
+    states = np.zeros((n_steps, n_envs, opt.history_length, 64, 64), dtype=np.float32)
+    actions = np.zeros((n_steps, n_envs), dtype=np.int64)
+    logps = np.zeros((n_steps, n_envs), dtype=np.float64)
+    values = np.zeros((n_steps, n_envs), dtype=np.float64)
+    rewards = np.zeros((n_steps, n_envs), dtype=np.float64)
+    dones = np.zeros((n_steps, n_envs), dtype=bool)
+
+    while step_cnt < opt.steps:
+        for t in range(n_steps):
+            with progress.time("act"):
+                a, lp, v = agent.act_batch(obs)
+            states[t], actions[t], logps[t], values[t] = obs, a, lp, v
+            with progress.time("env"):
+                r, d, finished = venv.step(a)
+                obs = venv.observations()
+            rewards[t], dones[t] = r, d
+            for stats in finished:
+                stats_file.write(json.dumps(stats) + "\n")
+                ep_cnt += 1
+                recent.append(stats["reward"])
+                if opt.log_episodes and len(recent) == 20:
+                    print(f"[{step_cnt}] Train mean_reward: {sum(recent) / len(recent):.1f}")
+                    recent = []
+            if finished:
+                stats_file.flush()
+            for i in range(n_envs):
+                progress.step(r[i], d[i])
+            step_cnt += n_envs
+
+        with progress.time("learn"):
+            # GAE per environment (each column is one environment's trajectory), same formula
+            # as the single-environment code
+            adv = np.stack([agent._advantages(rewards[:, i], values[:, i], dones[:, i])
+                            for i in range(n_envs)], axis=1)
+            agent.update(states.reshape(-1, opt.history_length, 64, 64), actions.reshape(-1),
+                         logps.reshape(-1), values.reshape(-1), adv.reshape(-1))
+        actor_losses_log.append(agent.avg_actor_loss)
+        critic_losses_log.append(agent.avg_critic_loss)
+        total_losses_log.append(agent.total_loss)
+        entropy_log.append(agent.avg_entropy)
+
+        if step_cnt >= next_eval:
+            with progress.time("eval"):
+                eval(agent, eval_env, step_cnt, opt)
+            next_eval += opt.eval_interval
+
+    progress.summary()
+    venv.close()
+    stats_file.close()
+    print("Number of episodes : " + str(ep_cnt))
+    agent.save_models()
+    print("... saving logs...")
+    save_training_logs(actor_losses_log, critic_losses_log, total_losses_log, opt.logdir)
+    with open(opt.logdir + '/entropy_log.txt', 'w') as fp:
+        fp.writelines("%s\n" % item for item in entropy_log)
+
+
 def get_options():
     """ Configures a parser. Extend this with all the best performing hyperparameters of
         your agent as defaults.
@@ -197,6 +289,24 @@ def get_options():
         help="Entropy bonus weight in the PPO loss (0 = 2022 behaviour; 0.01 is the usual value).",
     )
     parser.add_argument(
+        "--num-envs",
+        type=int,
+        default=1,
+        help="Number of environments run in parallel (1 = 2022 behaviour: a single environment).",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help="Worker processes hosting the environments (default: one per environment).",
+    )
+    parser.add_argument(
+        "--rollout",
+        type=int,
+        default=2048,
+        help="Transitions collected per PPO update, over all environments (2022: 2048).",
+    )
+    parser.add_argument(
         "--log-every",
         type=int,
         default=5_000,
@@ -213,4 +323,8 @@ def get_options():
 
 
 if __name__ == "__main__":
-    main(get_options())
+    options = get_options()
+    if options.num_envs > 1:
+        main_vec(options)
+    else:
+        main(options)

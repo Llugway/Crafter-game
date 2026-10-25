@@ -71,6 +71,18 @@ scripts\run_seeds.bat -Runs 3 -Steps 1000000 -EvalInterval 50000     # from cmd 
 .\scripts\run_seeds.ps1 -Runs 3 -Steps 1000000 -EvalInterval 50000    # from PowerShell
 ```
 
+### Several environments in parallel (PPO)
+
+```powershell
+python train_ppo.py --num-envs 16 --num-workers 8 --steps 1000000 --eval-interval 50000 --logdir logdir/ppo_vec16/1
+```
+
+`--num-envs N` runs N Crafter environments in `--num-workers` processes (`src/vec_env.py`) and picks
+their N actions in one batched network pass. The update is unchanged (2,048 transitions,
+10 epochs, mini-batches of 64), but the 2,048 transitions now come from N environments × 2048/N
+steps. This changes the data the agent learns from, so it is compared against the reference like
+any other step. `--num-envs 1` (default) is the 2022 single-environment loop.
+
 Play the game yourself (useful to understand it): `pip install pygame-ce` once, then
 `python -m crafter.run_gui`.
 
@@ -166,7 +178,7 @@ measurable starting point, and each fix will be a step compared against it.
 - **Grayscale observations**: colour distinguishes key elements (iron, coal, diamond, water…),
   and grayscale loses it.
 - **Under-used GPU**: the environment runs on a single CPU core, so the GPU waits most of the
-  time. Running environments in parallel will be one of the first gains.
+  time. Several environments in parallel are now available with `--num-envs` (default 1).
 
 The 2022 M-DQN agent was removed: it depended on a `ReplayBuffer` class missing from the
 repository. It is still available in the git history (first commit).
