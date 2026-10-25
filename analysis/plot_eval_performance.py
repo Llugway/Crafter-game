@@ -7,11 +7,15 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+SHOW = False
+
 
 acronyms = {
     "random_agent": "RDN",
     "dqn_agent": "DQN",
-    "own_agent": "DQN"
+    "ddqn_agent": "DDQN",
+    "ppo_agent": "PPO",
+    "own_agent": "DQN",
 }
 
 def read_pkl(path):
@@ -64,7 +68,7 @@ def read_crafter_logs(indir, outdir, clip=True):
     df = pd.concat(runs, ignore_index=True)
     sns.lineplot(x="step", y="avg_return", data=df)
     plt.savefig(outdir + "/avg_rewards.png")
-    plt.show()
+    plt.show() if SHOW else plt.close("all")
 
 
 def read_crafter_json(indir, outdir,  clip=True):
@@ -95,7 +99,7 @@ def read_crafter_json(indir, outdir,  clip=True):
         print(f"Clipped al runs to {min_len}.")
 
     methods = {
-        acronyms[outdir]: {}
+        acronyms.get(pathlib.Path(outdir).name, pathlib.Path(outdir).name): {}
     }
 
     colors = ['g', 'r', 'c']
@@ -103,10 +107,10 @@ def read_crafter_json(indir, outdir,  clip=True):
     achievements = df.keys().drop(labels=["length", "reward", "run"])
     for key in achievements:
         percent = 100 * (np.array(df[key]) >= 1).mean()
-        methods[acronyms[outdir]][key] = percent
+        methods[acronyms.get(pathlib.Path(outdir).name, pathlib.Path(outdir).name)][key] = percent
 
     fig, ax = plt.subplots(figsize=(7, 3))
-    centers = np.arange(len(methods[acronyms[outdir]]))
+    centers = np.arange(len(methods[acronyms.get(pathlib.Path(outdir).name, pathlib.Path(outdir).name)]))
     width = 0.7
     for index, (key, sr) in enumerate(methods.items(), start=0):
         heights = np.array(list(sr.values()))
@@ -115,7 +119,7 @@ def read_crafter_json(indir, outdir,  clip=True):
         color = 'b'
         ax.bar(pos, heights, width / len(methods), label=key, color=color)
 
-    names = [x[len('achievement_'):].replace('_', ' ').title() for x in methods[acronyms[outdir]].keys()]
+    names = [x[len('achievement_'):].replace('_', ' ').title() for x in methods[acronyms.get(pathlib.Path(outdir).name, pathlib.Path(outdir).name)].keys()]
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.spines['bottom'].set_visible(False)
@@ -133,10 +137,10 @@ def read_crafter_json(indir, outdir,  clip=True):
     fig.legend(
         loc='upper center', ncol=10, frameon=False, borderpad=1, borderaxespad=0)
     fig.savefig(outdir + "/spectrum_achievements.png")
-    plt.show()
+    plt.show() if SHOW else plt.close("all")
 
     """
-    score = np.array(list(methods[acronyms[outdir]].values()))
+    score = np.array(list(methods[acronyms.get(pathlib.Path(outdir).name, pathlib.Path(outdir).name)].values()))
     mean = score.mean()
     std = score.std()
     print(mean)
@@ -156,7 +160,7 @@ def read_crafter_json(indir, outdir,  clip=True):
     ax.set_ylim(1, 20)
 
     # fig.tight_layout()
-    plt.show()
+    plt.show() if SHOW else plt.close("all")
     
     """
 
@@ -171,14 +175,17 @@ def read_loss_log(indir, outdir):
         ret = read_txt(fn)
         lists.append(np.asarray(ret, dtype=float))
 
-    data = np.asarray(lists)
-    avg_data = np.average(data, axis=0)
+    if not lists:
+        print("No loss_log.txt found, skipping the loss plot.")
+        return
+    n = min(len(x) for x in lists)
+    avg_data = np.average(np.asarray([x[:n] for x in lists]), axis=0)
 
     plt.style.use("ggplot")
     plt.figure()
     plt.plot(avg_data)
     plt.savefig(outdir + "/avg_loss.png")
-    plt.show()
+    plt.show() if SHOW else plt.close("all")
 
 
 def read_q_values_log(indir, outdir):
@@ -192,14 +199,16 @@ def read_q_values_log(indir, outdir):
         ret = read_txt(fn)
         lists.append(np.asarray(ret, dtype=float))
 
-    data = np.asarray(lists)
-    avg_data = np.average(data, axis=0)
+    if not lists:
+        return
+    n = min(len(x) for x in lists)
+    avg_data = np.average(np.asarray([x[:n] for x in lists]), axis=0)
 
     plt.style.use("ggplot")
     plt.figure()
     plt.plot(avg_data)
     plt.savefig(outdir + "/avg_q_values.png")
-    plt.show()
+    plt.show() if SHOW else plt.close("all")
 
 
 if __name__ == "__main__":
@@ -209,13 +218,17 @@ if __name__ == "__main__":
         default="logdir/random_agent",
         help="Path to the folder containing different runs.",
     )
+    parser.add_argument("--out", default=None, help="Output folder (default: analysis/<agent folder name>).")
+    parser.add_argument("--show", action="store_true", help="Also open the figures in a window.")
     cfg = parser.parse_args()
+    SHOW = cfg.show
 
-    split = cfg.logdir.split("/")
+    name = pathlib.Path(cfg.logdir).name
+    outdir = cfg.out or str(pathlib.Path(__file__).parent / name)
+    pathlib.Path(outdir).mkdir(parents=True, exist_ok=True)
+    print("Saving plots in " + outdir)
 
-    print("Saves in " + split[-1] + " directoy")
-
-    read_loss_log(cfg.logdir, split[-1])
-    # read_q_values_log(cfg.logdir, split[-1])
-    read_crafter_json(cfg.logdir, split[-1])
-    read_crafter_logs(cfg.logdir, split[-1])
+    read_loss_log(cfg.logdir, outdir)
+    # read_q_values_log(cfg.logdir, outdir)
+    read_crafter_json(cfg.logdir, outdir)
+    read_crafter_logs(cfg.logdir, outdir)

@@ -39,7 +39,8 @@ class ActorNetwork(nn.Module):
         return dist
 
     def save_checkpoint(self):
+        os.makedirs(os.path.dirname(self.checkpoint_file), exist_ok=True)
         torch.save(self.state_dict(), self.checkpoint_file)
 
     def load_checkpoint(self):
-        self.load_state_dict(torch.load(self.checkpoint_file))
+        self.load_state_dict(torch.load(self.checkpoint_file, map_location=self.device))
