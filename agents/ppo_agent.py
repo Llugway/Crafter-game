@@ -9,8 +9,16 @@ from memories.ppo_memory import PPOMemory
 class PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.99, lr=0.0003, gae_lambda=0.95,
                  policy_clip=0.2, batch_size=64, n_epochs=10, n_rollouts=2048, max_grad_norm=0.5,
-                 chkpt_dir='checkpoints/ppo', ent_coef=0.0):
+                 chkpt_dir='checkpoints/ppo', ent_coef=0.0,
+                 norm_adv=False, gae_cut_at_done=False, bootstrap=False):
         self.gamma = gamma
+        # Correctness fixes, all off by default (= 2022 behaviour):
+        #   norm_adv         normalise advantages per mini-batch in the policy loss
+        #   gae_cut_at_done  stop the GAE sum at the end of an episode
+        #   bootstrap        use V(next state) for the last step of a rollout instead of 0
+        self.norm_adv = norm_adv
+        self.gae_cut_at_done = gae_cut_at_done
+        self.bootstrap = bootstrap
         # Weight of the entropy bonus in the loss. 0.0 = state 0 (2022 code, no bonus).
         self.ent_coef = ent_coef
         self.policy_clip = policy_clip
@@ -68,28 +76,49 @@ class PPO_Agent:
             out = torch.stack([actions.float(), dist.log_prob(actions), values]).cpu().numpy()
         return out[0].astype(np.int64), out[1], out[2]
 
-    def _advantages(self, reward_arr, values, dones_arr):
-        """a_t = delta_t + gamma*lambda*a_{t+1}, delta_t = r_t + gamma*V(s_{t+1})*(1-done_t) - V(s_t)."""
+    def _advantages(self, reward_arr, values, dones_arr, last_value=None):
+        """GAE: a_t = delta_t + gamma*lambda*a_{t+1}, delta_t = r_t + gamma*V(s_{t+1})*(1-done_t) - V(s_t).
+
+        2022 behaviour (both fixes off): the last step gets 0 (no V(s_T) available) and the
+        sum of deltas runs across episode boundaries.
+        gae_cut_at_done: a_t = delta_t + gamma*lambda*(1-done_t)*a_{t+1} (standard GAE).
+        bootstrap (last_value = V(s_T)): the last step also gets an advantage.
+        """
         r = np.asarray(reward_arr, dtype=np.float64)
         v = np.asarray(values, dtype=np.float64)
         d = np.asarray(dones_arr, dtype=np.float64)
         adv = np.zeros(len(r), dtype=np.float64)
+        n = len(r)
+        if self.bootstrap and last_value is not None:
+            v = np.append(v, float(last_value))   # V(s_T), the state after the last step
+            first = n - 1
+        else:
+            first = n - 2
         a = 0.0
-        for t in range(len(r) - 2, -1, -1):
+        for t in range(first, -1, -1):
             delta = r[t] + self.gamma * v[t + 1] * (1 - d[t]) - v[t]
-            a = delta + self.gamma * self.gae_lambda * a
+            carry = (1 - d[t]) if self.gae_cut_at_done else 1.0
+            a = delta + self.gamma * self.gae_lambda * carry * a
             adv[t] = a
         return adv.astype(np.float32)
 
-    def learn(self):
-        """One PPO update on the rollout stored in self.memory (single environment)."""
+    def value(self, observations):
+        """Critic value(s) V(s) as numpy, for one observation [1, 4, 64, 64] or a batch."""
+        with torch.no_grad():
+            states = torch.as_tensor(observations).to(self.actor.device)
+            return self.critic(states).reshape(-1).cpu().numpy().astype(np.float64)
+
+    def learn(self, last_obs=None):
+        """One PPO update on the rollout stored in self.memory (single environment).
+        last_obs: observation after the last stored step (used only if bootstrap is on)."""
         _, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, _ = self.memory.generate_batches()
         # Advantages (GAE). They depend only on the rollout, not on the epoch, so they are
         # computed once. The original code recomputed them at every epoch with a double loop
         # (O(n^2), ~2M iterations, ~20 s per rollout). This backward recursion gives exactly the
         # same numbers (checked bit-for-bit), including the original behaviour that the
         # discount chain is *not* cut at episode boundaries and the last step gets 0.
-        advantage = self._advantages(reward_arr, vals_arr, dones_arr)
+        last_value = self.value(last_obs)[0] if (self.bootstrap and last_obs is not None) else None
+        advantage = self._advantages(reward_arr, vals_arr, dones_arr, last_value)
         self.update(self.memory.states, action_arr, old_prob_arr, vals_arr, advantage)
         self.memory.clear_memory()
 
@@ -131,9 +160,15 @@ class PPO_Agent:
                 new_probs = dist.log_prob(actions)
                 prob_ratio = new_probs.exp() / old_probs.exp()
 
-                weighted_probs = advantage[batch] * prob_ratio
+                adv = advantage[batch]
+                if self.norm_adv:
+                    # zero mean, unit std in this mini-batch: the size of the policy step no
+                    # longer depends on the scale of the rewards. Only for the policy loss: the
+                    # critic still learns the raw returns below.
+                    adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+                weighted_probs = adv * prob_ratio
                 weighted_clipped_probs = torch.clamp(prob_ratio, 1 - self.policy_clip,
-                                                     1 + self.policy_clip) * advantage[batch]
+                                                     1 + self.policy_clip) * adv
                 actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
 
                 returns = advantage[batch] + values[batch]

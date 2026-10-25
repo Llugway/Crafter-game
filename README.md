@@ -172,11 +172,12 @@ measurable starting point, and each fix will be a step compared against it.
 - **PPO**:
   - no entropy bonus, so the policy freezes early (now available with `--ent-coef`,
     default 0 = 2022 behaviour; the policy entropy is logged to `entropy_log.txt` in every run);
-  - advantages not normalised;
+  - advantages not normalised (**fixable**: `--norm-adv 1`);
   - GAE recomputed in O(n²) at every epoch, about 20 s per rollout: **fixed**, it is now
     computed once in O(n), with bit-identical results;
-  - GAE does not stop the discounted sum at episode boundaries (not fixed);
-  - no value bootstrap at the end of a rollout;
+  - GAE does not stop the discounted sum at episode boundaries (**fixable**: `--gae-cut-at-done 1`);
+  - no value bootstrap at the end of a rollout (**fixable**: `--bootstrap 1`);
+  - `--fixes 1` enables these three fixes at once (default 0 = 2022 behaviour);
   - a single environment.
 - **Grayscale observations**: colour distinguishes key elements (iron, coal, diamond, water…),
   and grayscale loses it.

@@ -81,6 +81,23 @@ def save_training_logs(actor_losses_log, critic_losses_log, total_losses_log, ou
             fp.write("%s\n" % item)
 
 
+def save_entropy_log(entropy_log, output_dir):
+    with open(output_dir + '/entropy_log.txt', 'w') as fp:
+        fp.writelines("%s\n" % item for item in entropy_log)
+
+
+def make_agent(opt, n_rollouts):
+    fixes = bool(opt.fixes)
+    agent = PPO_Agent(n_actions=17, input_dims=[opt.history_length, 64, 64], n_rollouts=n_rollouts,
+                      chkpt_dir=opt.logdir + "/checkpoints", ent_coef=opt.ent_coef,
+                      norm_adv=fixes or bool(opt.norm_adv),
+                      gae_cut_at_done=fixes or bool(opt.gae_cut_at_done),
+                      bootstrap=fixes or bool(opt.bootstrap))
+    print(f"PPO fixes: norm_adv={agent.norm_adv}, gae_cut_at_done={agent.gae_cut_at_done}, "
+          f"bootstrap={agent.bootstrap}, ent_coef={agent.ent_coef}")
+    return agent
+
+
 def main(opt):
 
     _info(opt)
@@ -95,8 +112,7 @@ def main(opt):
 
     # agent = RandomAgent(env.action_space.n)
     # checkpoints go inside the run folder, so parallel runs do not overwrite each other
-    agent = PPO_Agent(n_actions=env.action_space.n, input_dims=[4, 64, 64], n_rollouts=nb_rollouts,
-                      chkpt_dir=opt.logdir + "/checkpoints", ent_coef=opt.ent_coef)
+    agent = make_agent(opt, n_rollouts=nb_rollouts)
 
     actor_losses_log = []
     critic_losses_log = []
@@ -138,11 +154,14 @@ def main(opt):
 
         if step_cnt % nb_rollouts == 0:
             with progress.time("learn"):
-                agent.learn()
+                agent.learn(last_obs=obs_)
             actor_losses_log.append(agent.avg_actor_loss)
             critic_losses_log.append(agent.avg_critic_loss)
             total_losses_log.append(agent.total_loss)
             entropy_log.append(agent.avg_entropy)
+            # written after every update, so a stopped run keeps its logs
+            save_training_logs(actor_losses_log, critic_losses_log, total_losses_log, opt.logdir)
+            save_entropy_log(entropy_log, opt.logdir)
 
         obs = obs_
 
@@ -156,8 +175,7 @@ def main(opt):
     agent.save_models()
     print("... saving logs...")
     save_training_logs(actor_losses_log, critic_losses_log, total_losses_log, opt.logdir)
-    with open(opt.logdir + '/entropy_log.txt', 'w') as fp:
-        fp.writelines("%s\n" % item for item in entropy_log)
+    save_entropy_log(entropy_log, opt.logdir)
 
 
 def main_vec(opt):
@@ -185,8 +203,7 @@ def main_vec(opt):
 
     venv = VecCrafter(n_envs, num_workers=opt.num_workers, history_length=opt.history_length)
     eval_env = Env("eval", opt)
-    agent = PPO_Agent(n_actions=17, input_dims=[opt.history_length, 64, 64], n_rollouts=opt.rollout,
-                      chkpt_dir=opt.logdir + "/checkpoints", ent_coef=opt.ent_coef)
+    agent = make_agent(opt, n_rollouts=opt.rollout)
 
     stats_file = open(opt.logdir + "/stats.jsonl", "a")  # same format as crafter.Recorder
     actor_losses_log, critic_losses_log, total_losses_log, entropy_log = [], [], [], []
@@ -227,7 +244,8 @@ def main_vec(opt):
         with progress.time("learn"):
             # GAE per environment (each column is one environment's trajectory), same formula
             # as the single-environment code
-            adv = np.stack([agent._advantages(rewards[:, i], values[:, i], dones[:, i])
+            last_values = agent.value(obs) if agent.bootstrap else [None] * n_envs
+            adv = np.stack([agent._advantages(rewards[:, i], values[:, i], dones[:, i], last_values[i])
                             for i in range(n_envs)], axis=1)
             agent.update(states.reshape(-1, opt.history_length, 64, 64), actions.reshape(-1),
                          logps.reshape(-1), values.reshape(-1), adv.reshape(-1))
@@ -235,6 +253,8 @@ def main_vec(opt):
         critic_losses_log.append(agent.avg_critic_loss)
         total_losses_log.append(agent.total_loss)
         entropy_log.append(agent.avg_entropy)
+        save_training_logs(actor_losses_log, critic_losses_log, total_losses_log, opt.logdir)
+        save_entropy_log(entropy_log, opt.logdir)
 
         if step_cnt >= next_eval:
             with progress.time("eval"):
@@ -248,8 +268,7 @@ def main_vec(opt):
     agent.save_models()
     print("... saving logs...")
     save_training_logs(actor_losses_log, critic_losses_log, total_losses_log, opt.logdir)
-    with open(opt.logdir + '/entropy_log.txt', 'w') as fp:
-        fp.writelines("%s\n" % item for item in entropy_log)
+    save_entropy_log(entropy_log, opt.logdir)
 
 
 def get_options():
@@ -295,6 +314,11 @@ def get_options():
         default=0.0,
         help="Entropy bonus weight in the PPO loss (0 = 2022 behaviour; 0.01 is the usual value).",
     )
+    parser.add_argument("--fixes", type=int, default=0,
+                        help="1 = enable the three PPO correctness fixes below (default 0 = 2022 behaviour).")
+    parser.add_argument("--norm-adv", type=int, default=0, help="Normalise advantages per mini-batch.")
+    parser.add_argument("--gae-cut-at-done", type=int, default=0, help="Stop the GAE sum at episode ends.")
+    parser.add_argument("--bootstrap", type=int, default=0, help="Bootstrap V(s_T) at the end of a rollout.")
     parser.add_argument(
         "--num-envs",
         type=int,
