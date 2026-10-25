@@ -6,6 +6,7 @@ crafter>=1.8.3        # the game (pulls numpy, imageio, pillow, opensimplex, rua
 numpy>=1.24
 imageio>=2.30
 pillow>=10.0
+numba>=0.60          # used automatically by opensimplex: world generation ~16x faster, same worlds
 
 # analysis / plots
 pandas>=2.0
