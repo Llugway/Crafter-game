@@ -1,0 +1,16 @@
+# Install PyTorch FIRST, with the CUDA build matching your GPU (see README), e.g. on Windows + RTX 4090:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# then:  pip install -r requirements.txt
+
+crafter>=1.8.3        # the game (pulls numpy, imageio, pillow, opensimplex, ruamel.yaml)
+numpy>=1.24
+imageio>=2.30
+pillow>=10.0
+
+# analysis / plots
+pandas>=2.0
+matplotlib>=3.7
+seaborn>=0.13
+
+# optional: play Crafter yourself with  python -m crafter.run_gui
+pygame>=2.5

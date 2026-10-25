@@ -85,7 +85,8 @@ def main(opt):
     eval_env = Env("eval", opt)
 
     # agent = RandomAgent(env.action_space.n)
-    agent = DDQN_Agent(gamma=GAMMA, epsilon=EPSILON_START, batch_size=BATCH_SIZE, n_actions=env.action_space.n,
+    agent_cls = {"dqn": DQN_Agent, "ddqn": DDQN_Agent}[opt.agent]
+    agent = agent_cls(gamma=GAMMA, epsilon=EPSILON_START, batch_size=BATCH_SIZE, n_actions=env.action_space.n,
                       eps_end=EPSILON_END, input_dims=[4, 64, 64], lr=LR, max_mem_size=MAX_MEMORY)
 
     loss_log = []
@@ -141,7 +142,8 @@ def get_options():
         the evaluation interval.
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--logdir", default="logdir/random_agent/0")
+    parser.add_argument("--agent", choices=["dqn", "ddqn"], default="ddqn")
+    parser.add_argument("--logdir", default="logdir/ddqn_agent/0")
     parser.add_argument(
         "--steps",
         type=int,

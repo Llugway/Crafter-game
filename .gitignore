@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Outputs of new runs (results worth keeping go to results/ on purpose)
+logdir/
+checkpoints/
+analysis/*/
+*.mp4
+
+# OS
+.DS_Store
+Thumbs.db
