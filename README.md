@@ -32,9 +32,9 @@ Le code tourne nativement sous Windows : pas besoin de Linux ni de WSL pour l'in
 conda activate crafterEnv          # environnement existant ; sinon : conda create -n crafterEnv python=3.11
 cd Crafter-game
 
-# 1) PyTorch avec CUDA (RTX 4090 → build CUDA 12.x). Vérifiez la commande exacte sur
+# 1) PyTorch avec CUDA (build CUDA 13.0 : `nvidia-smi` doit afficher une version CUDA ≥ 13.0). Vérifiez la commande exacte sur
 #    https://pytorch.org/get-started/locally/ (Windows / Pip / CUDA le plus récent).
-pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install torch --index-url https://download.pytorch.org/whl/cu130
 
 # 2) Le reste
 pip install -r requirements.txt
