@@ -15,4 +15,4 @@ seaborn>=0.13
 # optional, to play Crafter yourself (python -m crafter.run_gui):
 #   pip install pygame-ce
 # pygame-ce is a drop-in fork of pygame with wheels for recent Python versions;
-# the original pygame has none for Python 3.14 and fails to build on Windows.
+# the original pygame has none for recent Python (3.14+) and fails to build on Windows.
