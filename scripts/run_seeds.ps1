@@ -6,6 +6,7 @@
 #                                                                # PPO, 16 parallel envs per run
 #   .\scripts\run_seeds.ps1 -NumEnvs 16 -EntCoef 0.01 -Name ppo_vec16_ent001 -Steps 1000000
 #   .\scripts\run_seeds.ps1 -NumEnvs 16 -Fixes 1 -Name ppo_vec16_fixes -Steps 1000000
+#   .\scripts\run_seeds.ps1 -NumEnvs 16 -Preset tuned -Name ppo_tuned -Steps 500000
 #   .\scripts\run_seeds.ps1 -Script train_dqn.py -Agent dqn -Runs 2 -Steps 500000
 #
 # From cmd / Anaconda Prompt use scripts\run_seeds.bat with the same arguments.
@@ -23,6 +24,7 @@ param(
     [int]$NumWorkers = 0,              # PPO only: worker processes per run (0 = automatic)
     [double]$EntCoef = -1,             # PPO only: entropy bonus (-1 = script default)
     [int]$Fixes = 0,                   # PPO only: 1 = the three correctness fixes (--fixes 1)
+    [string]$Preset = "",              # PPO only: e.g. tuned (--preset tuned)
     [string]$Name = "",                # results go to logdir/<Name>/<run>
     [int]$FirstRun = 1                 # number of the first run folder
 )
@@ -43,6 +45,7 @@ for ($i = $FirstRun; $i -lt $FirstRun + $Runs; $i++) {
     if ($NumEnvs -gt 1) { $cmdArgs += @("--num-envs", $NumEnvs, "--num-workers", $NumWorkers) }
     # invariant culture: on a French Windows, 0.01 would otherwise be written "0,01"
     if ($Fixes -gt 0) { $cmdArgs += @("--fixes", 1) }
+    if ($Preset) { $cmdArgs += @("--preset", $Preset) }
     if ($EntCoef -ge 0) { $cmdArgs += @("--ent-coef", $EntCoef.ToString([Globalization.CultureInfo]::InvariantCulture)) }
     Start-Process -FilePath "python" -ArgumentList $cmdArgs
     Write-Host "started run $i -> logdir/$name/$i   (python $($cmdArgs -join ' '))"
