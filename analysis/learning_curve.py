@@ -103,8 +103,8 @@ if __name__ == "__main__":
             if len(ent) > 1:
                 axes[3].fill_between(xs, e.min(0), e.max(0), alpha=0.2, color=line.get_color())
             print(f"policy entropy (max ln17 = 2.83): start {e.mean(0)[0]:.2f}, "
-                  + ", ".join(f"{int(k)//1000}k {e.mean(0)[min(m - 1, int(k // cfg.rollout))]:.2f}"
-                              for k in (100_000, 300_000, 500_000, 1_000_000) if k // cfg.rollout < m + 1))
+                  + ", ".join(f"{int(k)//1000}k {e.mean(0)[min(m - 1, int(k // rollout) - 1)]:.2f}"
+                              for k in (100_000, 300_000, 500_000, 1_000_000) if k // rollout <= m))
     axes[3].axhline(np.log(17), color="grey", ls="--", lw=1)
     axes[3].set_title("Policy entropy (dashed: uniform = ln 17)")
     axes[3].set_xlabel("training steps")
