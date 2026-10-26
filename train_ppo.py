@@ -86,15 +86,21 @@ def save_entropy_log(entropy_log, output_dir):
         fp.writelines("%s\n" % item for item in entropy_log)
 
 
-def make_agent(opt, n_rollouts):
+def make_agent(opt, n_rollouts, channels=None):
     fixes = bool(opt.fixes)
-    agent = PPO_Agent(n_actions=17, input_dims=[opt.history_length, 64, 64], n_rollouts=n_rollouts,
+    channels = channels or opt.history_length
+    batch_size = n_rollouts // opt.minibatches
+    agent = PPO_Agent(n_actions=17, input_dims=[channels, 64, 64], n_rollouts=n_rollouts,
+                      gamma=opt.gamma, gae_lambda=opt.gae_lambda, lr=opt.lr, n_epochs=opt.epochs,
+                      batch_size=batch_size,
                       chkpt_dir=opt.logdir + "/checkpoints", ent_coef=opt.ent_coef,
                       norm_adv=fixes or bool(opt.norm_adv),
                       gae_cut_at_done=fixes or bool(opt.gae_cut_at_done),
                       bootstrap=fixes or bool(opt.bootstrap))
-    print(f"PPO fixes: norm_adv={agent.norm_adv}, gae_cut_at_done={agent.gae_cut_at_done}, "
-          f"bootstrap={agent.bootstrap}, ent_coef={agent.ent_coef}")
+    print(f"PPO: input {channels}x64x64, gamma={opt.gamma}, lambda={opt.gae_lambda}, lr={opt.lr}, "
+          f"rollout={n_rollouts}, epochs={opt.epochs} x {opt.minibatches} mini-batches of {batch_size}, "
+          f"ent_coef={opt.ent_coef}, norm_adv={agent.norm_adv}, gae_cut_at_done={agent.gae_cut_at_done}, "
+          f"bootstrap={agent.bootstrap}")
     return agent
 
 
@@ -189,7 +195,7 @@ def main_vec(opt):
     import json
     import os
     import numpy as np
-    from src.vec_env import VecCrafter
+    from src.vec_env import VecCrafter, evaluate
 
     _info(opt)
     opt.device = torch.device("cpu")
@@ -201,9 +207,9 @@ def main_vec(opt):
     print(f"{n_envs} environments in {min(opt.num_workers or n_envs, n_envs)} worker processes, "
           f"{n_steps} steps each per rollout ({opt.rollout} transitions per update).")
 
-    venv = VecCrafter(n_envs, num_workers=opt.num_workers, history_length=opt.history_length)
-    eval_env = Env("eval", opt)
-    agent = make_agent(opt, n_rollouts=opt.rollout)
+    venv = VecCrafter(n_envs, num_workers=opt.num_workers, history_length=opt.history_length, rgb=bool(opt.rgb))
+    channels = venv.obs_channels
+    agent = make_agent(opt, n_rollouts=opt.rollout, channels=channels)
 
     stats_file = open(opt.logdir + "/stats.jsonl", "a")  # same format as crafter.Recorder
     actor_losses_log, critic_losses_log, total_losses_log, entropy_log = [], [], [], []
@@ -212,7 +218,7 @@ def main_vec(opt):
     step_cnt, ep_cnt, next_eval = 0, 0, opt.eval_interval
     recent = []
 
-    states = np.zeros((n_steps, n_envs, opt.history_length, 64, 64), dtype=np.float32)
+    states = np.zeros((n_steps, n_envs, channels, 64, 64), dtype=np.float32)
     actions = np.zeros((n_steps, n_envs), dtype=np.int64)
     logps = np.zeros((n_steps, n_envs), dtype=np.float64)
     values = np.zeros((n_steps, n_envs), dtype=np.float64)
@@ -247,7 +253,7 @@ def main_vec(opt):
             last_values = agent.value(obs) if agent.bootstrap else [None] * n_envs
             adv = np.stack([agent._advantages(rewards[:, i], values[:, i], dones[:, i], last_values[i])
                             for i in range(n_envs)], axis=1)
-            agent.update(states.reshape(-1, opt.history_length, 64, 64), actions.reshape(-1),
+            agent.update(states.reshape(-1, channels, 64, 64), actions.reshape(-1),
                          logps.reshape(-1), values.reshape(-1), adv.reshape(-1))
         actor_losses_log.append(agent.avg_actor_loss)
         critic_losses_log.append(agent.avg_critic_loss)
@@ -258,7 +264,11 @@ def main_vec(opt):
 
         if step_cnt >= next_eval:
             with progress.time("eval"):
-                eval(agent, eval_env, step_cnt, opt)
+                # same protocol as eval(): --eval-episodes episodes with the sampled policy,
+                # but with this run's preprocessing (grayscale stack or colour)
+                returns = evaluate(lambda o: agent.act_batch(o)[0], opt.eval_episodes,
+                                   opt.history_length, bool(opt.rgb))
+                _save_stats(returns, step_cnt, opt.logdir)
             next_eval += opt.eval_interval
 
     progress.summary()
@@ -350,7 +360,26 @@ def get_options():
         default=1,
         help="Also print the original 'Train mean_reward' line every 20 episodes (1) or not (0).",
     )
-    return parser.parse_args()
+    parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor (2022: 0.99).")
+    parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda (2022: 0.95).")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Adam learning rate (2022: 3e-4).")
+    parser.add_argument("--epochs", type=int, default=10, help="PPO epochs per rollout (2022: 10).")
+    parser.add_argument("--minibatches", type=int, default=32,
+                        help="Mini-batches per epoch; batch size = rollout / minibatches (2022: 32 -> 64).")
+    parser.add_argument("--rgb", type=int, default=0,
+                        help="1 = colour observations instead of grayscale (needs --num-envs > 1).")
+    parser.add_argument("--preset", default=None, choices=["tuned"],
+                        help="tuned = PPO settings of Moon et al. 2023 (see README); explicit flags are overridden.")
+    opt = parser.parse_args()
+    if opt.preset == "tuned":
+        # Moon et al. 2023, Table 3: gamma 0.95, lambda 0.65, 4096 steps per rollout, 3 epochs x 8
+        # mini-batches, entropy 0.01; plus the correctness fixes and colour input without stacking.
+        opt.gamma, opt.gae_lambda, opt.rollout, opt.epochs, opt.minibatches = 0.95, 0.65, 4096, 3, 8
+        opt.ent_coef, opt.fixes, opt.rgb, opt.history_length = 0.01, 1, 1, 1
+        opt.num_envs = max(opt.num_envs, 16)
+    if opt.rgb and opt.num_envs <= 1:
+        parser.error("--rgb / --preset need --num-envs > 1")
+    return opt
 
 
 if __name__ == "__main__":

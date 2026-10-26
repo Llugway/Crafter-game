@@ -50,10 +50,64 @@ def _worker(conn, n_envs, seed):
         conn.send(out)
 
 
+class FrameStack:
+    """Observation preprocessing for N environments, shared by training and evaluation.
+
+    rgb=False (2022): grayscale, values in [0, 1], `history` frames -> [N, history, 64, 64].
+    rgb=True: colour channels kept, values in [0, 1], `history` frames -> [N, 3*history, 64, 64].
+    """
+
+    def __init__(self, num_envs, history, rgb=False):
+        self.history, self.rgb = history, rgb
+        self.c = 3 if rgb else 1
+        self.stack = np.zeros((num_envs, self.c * history, 64, 64), dtype=np.float32)
+
+    @staticmethod
+    def _gray(rgb):
+        # identical to crafter_wrapper: GrayScale (mean over channels, float64), then
+        # torch.tensor(..., dtype=float32).div_(255)
+        return np.float32(rgb.mean(-1)) / np.float32(255)
+
+    def push(self, i, rgb):
+        c = self.c
+        self.stack[i, :-c] = self.stack[i, c:]
+        if self.rgb:
+            self.stack[i, -c:] = rgb.transpose(2, 0, 1).astype(np.float32) / np.float32(255)
+        else:
+            self.stack[i, -1] = self._gray(rgb)
+
+    def new_episode(self, i, rgb):
+        # same as crafter_wrapper.Env.reset: zeros, then the first frame
+        self.stack[i] = 0.0
+        self.push(i, rgb)
+
+    def observations(self):
+        return self.stack.copy()
+
+
+def evaluate(act_fn, episodes, history, rgb, seed=None):
+    """Play `episodes` evaluation episodes, one after the other, in this process.
+    act_fn(observations [1, C, 64, 64]) -> actions array [1]. Returns the episode returns."""
+    import crafter
+    env = crafter.Env(seed=seed)
+    frames = FrameStack(1, history, rgb)
+    returns = []
+    for _ in range(episodes):
+        frames.new_episode(0, env.reset())
+        done, total = False, 0.0
+        while not done:
+            action = act_fn(frames.observations())[0]
+            rgb_obs, reward, done, _ = env.step(int(action))
+            total += reward
+            frames.push(0, rgb_obs)
+        returns.append(total)
+    return returns
+
+
 class VecCrafter:
     """`num_envs` Crafter environments in `num_workers` processes, with frame stacking."""
 
-    def __init__(self, num_envs, num_workers=None, history_length=4, seed=None):
+    def __init__(self, num_envs, num_workers=None, history_length=4, seed=None, rgb=False):
         num_workers = max(1, min(num_workers or num_envs, num_envs))
         self.num_envs = num_envs
         self.history = history_length
@@ -73,23 +127,18 @@ class VecCrafter:
             self.procs.append(proc)
             offset += size
         first = sum((c.recv() for c in self.conns), [])
-        self.stack = np.zeros((num_envs, history_length, 64, 64), dtype=np.float32)
-        for i, rgb in enumerate(first):
-            self._push(i, rgb)
+        self.frames = FrameStack(num_envs, history_length, rgb)
+        self.obs_channels = self.frames.stack.shape[1]
+        for i, rgb_obs in enumerate(first):
+            self.frames.push(i, rgb_obs)
 
-    @staticmethod
-    def _gray(rgb):
-        # identical to crafter_wrapper: GrayScale (mean over channels, float64), then
-        # torch.tensor(..., dtype=float32).div_(255)
-        return np.float32(rgb.mean(-1)) / np.float32(255)
-
-    def _push(self, i, rgb):
-        self.stack[i, :-1] = self.stack[i, 1:]
-        self.stack[i, -1] = self._gray(rgb)
+    @property
+    def stack(self):
+        return self.frames.stack
 
     def observations(self):
-        """Current stacked observations, float32 array [num_envs, history, 64, 64]."""
-        return self.stack.copy()
+        """Current observations, float32 array [num_envs, channels, 64, 64]."""
+        return self.frames.observations()
 
     def step(self, actions):
         """Returns rewards [N], dones [N] and the list of finished-episode stats."""
@@ -104,10 +153,10 @@ class VecCrafter:
         for i, (rgb, reward, done, stats) in enumerate(results):
             rewards[i], dones[i] = reward, done
             if done:
-                # new episode: same as crafter_wrapper.Env.reset (zeros, then the first frame)
-                self.stack[i] = 0.0
                 finished.append(stats)
-            self._push(i, rgb)
+                self.frames.new_episode(i, rgb)
+            else:
+                self.frames.push(i, rgb)
         return rewards, dones, finished
 
     def close(self):
