@@ -200,6 +200,8 @@ def main_vec(opt):
     _info(opt)
     opt.device = torch.device("cpu")
     os.makedirs(opt.logdir, exist_ok=True)
+    with open(opt.logdir + "/config.json", "w") as f:   # every setting of this run, for the analysis
+        json.dump({k: v for k, v in vars(opt).items() if k != "device"}, f, indent=1)
 
     n_envs = opt.num_envs
     n_steps = opt.rollout // n_envs  # steps per environment per rollout

@@ -58,10 +58,14 @@ if __name__ == "__main__":
     fig, axes = plt.subplots(1, 4, figsize=(20, 4))
     for d, label in zip(cfg.logdir, labels):
         files = sorted(pathlib.Path(d).glob("**/stats.jsonl"))
+        print(f"\n{label}: {len(files)} stats.jsonl found under {pathlib.Path(d).resolve()}")
+        if not files:
+            print("  -> nothing to plot for this group: check the path (run from the repository root?)")
+            continue
         runs = [windows(load_run(f), cfg.window, cfg.budget) for f in files]
         runs = [r for r in runs if r]
         if not runs:
-            print(f"{label}: no data")
+            print(f"  -> runs too short for a {cfg.window:,}-step window")
             continue
         n = min(len(r) for r in runs)
         steps = np.array([runs[0][i]["steps"] for i in range(n)])
@@ -87,10 +91,14 @@ if __name__ == "__main__":
         # policy entropy per PPO update (entropy_log.txt), if the runs logged it
         ent = [np.loadtxt(f.parent / "entropy_log.txt", ndmin=1) for f in files if (f.parent / "entropy_log.txt").exists()]
         ent = [e for e in ent if len(e)]
+        # transitions per PPO update: from the run's config.json if it has one (newer runs),
+        # otherwise --rollout
+        conf = files[0].parent / "config.json"
+        rollout = json.load(open(conf)).get("rollout", cfg.rollout) if conf.exists() else cfg.rollout
         if ent:
-            m = min(len(e) for e in ent)
+            m = min(min(len(e) for e in ent), cfg.budget // rollout)
             e = np.array([x[:m] for x in ent])
-            xs = np.arange(1, m + 1) * cfg.rollout
+            xs = np.arange(1, m + 1) * rollout
             line, = axes[3].plot(xs, e.mean(0), label=label)
             if len(ent) > 1:
                 axes[3].fill_between(xs, e.min(0), e.max(0), alpha=0.2, color=line.get_color())
@@ -105,4 +113,5 @@ if __name__ == "__main__":
     fig.tight_layout()
     pathlib.Path(cfg.out).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(cfg.out, dpi=120)
+    plt.close(fig)
     print(f"\nFigure: {cfg.out}")
