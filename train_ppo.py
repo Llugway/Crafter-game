@@ -96,11 +96,12 @@ def make_agent(opt, n_rollouts, channels=None):
                       chkpt_dir=opt.logdir + "/checkpoints", ent_coef=opt.ent_coef,
                       norm_adv=fixes or bool(opt.norm_adv),
                       gae_cut_at_done=fixes or bool(opt.gae_cut_at_done),
-                      bootstrap=fixes or bool(opt.bootstrap))
+                      bootstrap=fixes or bool(opt.bootstrap),
+                      arch=opt.arch, value_norm=bool(opt.value_norm))
     print(f"PPO: input {channels}x64x64, gamma={opt.gamma}, lambda={opt.gae_lambda}, lr={opt.lr}, "
           f"rollout={n_rollouts}, epochs={opt.epochs} x {opt.minibatches} mini-batches of {batch_size}, "
           f"ent_coef={opt.ent_coef}, norm_adv={agent.norm_adv}, gae_cut_at_done={agent.gae_cut_at_done}, "
-          f"bootstrap={agent.bootstrap}")
+          f"bootstrap={agent.bootstrap}, value_norm={agent.value_norm is not None}")
     return agent
 
 
@@ -133,7 +134,7 @@ def main(opt):
     batch_episode_reward = 0.0
     batch_episode_count = 0
 
-    progress = Progress(opt.steps, every=opt.log_every, device=agent.actor.device)
+    progress = Progress(opt.steps, every=opt.log_every, device=agent.device)
 
     while step_cnt < opt.steps or not done:
         if done:
@@ -215,7 +216,7 @@ def main_vec(opt):
 
     stats_file = open(opt.logdir + "/stats.jsonl", "a")  # same format as crafter.Recorder
     actor_losses_log, critic_losses_log, total_losses_log, entropy_log = [], [], [], []
-    progress = Progress(opt.steps, every=opt.log_every, device=agent.actor.device)
+    progress = Progress(opt.steps, every=opt.log_every, device=agent.device)
     obs = venv.observations()
     step_cnt, ep_cnt, next_eval = 0, 0, opt.eval_interval
     recent = []
@@ -370,15 +371,22 @@ def get_options():
                         help="Mini-batches per epoch; batch size = rollout / minibatches (2022: 32 -> 64).")
     parser.add_argument("--rgb", type=int, default=0,
                         help="1 = colour observations instead of grayscale (needs --num-envs > 1).")
-    parser.add_argument("--preset", default=None, choices=["tuned"],
-                        help="tuned = PPO settings of Moon et al. 2023 (see README); explicit flags are overridden.")
+    parser.add_argument("--arch", default="nature", choices=["nature", "impala"],
+                        help="nature = 2022 networks (separate actor/critic CNNs); impala = shared ResNet (~4M params).")
+    parser.add_argument("--value-norm", type=int, default=0, help="1 = critic learns normalised value targets.")
+    parser.add_argument("--preset", default=None, choices=["tuned", "tuned-resnet"],
+                        help="tuned = PPO settings of Moon et al. 2023 (see README); tuned-resnet = tuned + "
+                             "IMPALA ResNet + value normalisation. Explicit flags are overridden.")
     opt = parser.parse_args()
-    if opt.preset == "tuned":
+    if opt.preset in ("tuned", "tuned-resnet"):
         # Moon et al. 2023, Table 3: gamma 0.95, lambda 0.65, 4096 steps per rollout, 3 epochs x 8
         # mini-batches, entropy 0.01; plus the correctness fixes and colour input without stacking.
         opt.gamma, opt.gae_lambda, opt.rollout, opt.epochs, opt.minibatches = 0.95, 0.65, 4096, 3, 8
         opt.ent_coef, opt.fixes, opt.rgb, opt.history_length = 0.01, 1, 1, 1
         opt.num_envs = max(opt.num_envs, 16)
+    if opt.preset == "tuned-resnet":
+        # the rest of Moon et al.'s recipe: larger shared ResNet with layer norm, value normalisation
+        opt.arch, opt.value_norm = "impala", 1
     if opt.rgb and opt.num_envs <= 1:
         parser.error("--rgb / --preset need --num-envs > 1")
     return opt

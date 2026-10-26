@@ -3,6 +3,32 @@ import torch
 import torch.nn.functional as F
 from networks.actor_network import ActorNetwork
 from networks.critic_network import CriticNetwork
+from networks.impala import ImpalaActorCritic
+
+
+class ValueNormalizer:
+    """Running mean / std of the value targets (returns), updated with an exponential moving
+    average (decay 0.99) once per rollout, with the usual start-up bias correction.
+
+    The critic then predicts *normalised* values: its target always has roughly zero mean and
+    unit variance, whatever the scale of the returns (which grows as the agent unlocks more
+    achievements). Values are de-normalised before they are used for the advantages."""
+
+    def __init__(self, decay=0.99):
+        self.decay, self.count = decay, 0
+        self.mean, self.sq = 0.0, 0.0
+
+    def update(self, returns):
+        self.count += 1
+        self.mean = self.decay * self.mean + (1 - self.decay) * float(returns.mean())
+        self.sq = self.decay * self.sq + (1 - self.decay) * float((returns ** 2).mean())
+
+    def stats(self):
+        if self.count == 0:
+            return 0.0, 1.0
+        corr = 1 - self.decay ** self.count
+        mean, sq = self.mean / corr, self.sq / corr
+        return mean, max(sq - mean ** 2, 1e-4) ** 0.5
 from memories.ppo_memory import PPOMemory
 
 
@@ -10,8 +36,14 @@ class PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.99, lr=0.0003, gae_lambda=0.95,
                  policy_clip=0.2, batch_size=64, n_epochs=10, n_rollouts=2048, max_grad_norm=0.5,
                  chkpt_dir='checkpoints/ppo', ent_coef=0.0,
-                 norm_adv=False, gae_cut_at_done=False, bootstrap=False):
+                 norm_adv=False, gae_cut_at_done=False, bootstrap=False,
+                 arch='nature', value_norm=False):
         self.gamma = gamma
+        # arch: 'nature' = the 2022 networks (separate actor and critic CNNs),
+        #       'impala' = shared IMPALA ResNet encoder with two heads (networks/impala.py)
+        # value_norm: the critic learns normalised value targets (ValueNormalizer)
+        self.arch = arch
+        self.value_norm = ValueNormalizer() if value_norm else None
         # Correctness fixes, all off by default (= 2022 behaviour):
         #   norm_adv         normalise advantages per mini-batch in the policy loss
         #   gae_cut_at_done  stop the GAE sum at the end of an episode
@@ -27,8 +59,17 @@ class PPO_Agent:
         self.max_grad_norm = max_grad_norm
 
         # Actor/Critic policies
-        self.actor = ActorNetwork(n_actions, input_dims, lr, chkpt_dir=chkpt_dir)
-        self.critic = CriticNetwork(input_dims, lr, chkpt_dir=chkpt_dir)
+        if arch == 'impala':
+            self.model = ImpalaActorCritic(n_actions, input_dims, lr, chkpt_dir=chkpt_dir)
+            self.networks = [self.model]
+        else:
+            self.model = None
+            self.actor = ActorNetwork(n_actions, input_dims, lr, chkpt_dir=chkpt_dir)
+            self.critic = CriticNetwork(input_dims, lr, chkpt_dir=chkpt_dir)
+            self.networks = [self.actor, self.critic]
+        self.device = self.networks[0].device
+        n_params = sum(p.numel() for net in self.networks for p in net.parameters())
+        print(f"Network: {arch}, {n_params / 1e6:.2f}M parameters")
 
         # Memory for each rollout
         self.memory = PPOMemory(batch_size, input_dims, n_rollouts)
@@ -44,21 +85,33 @@ class PPO_Agent:
 
     def save_models(self):
         print('... saving models ...')
-        self.actor.save_checkpoint()
-        self.critic.save_checkpoint()
+        for net in self.networks:
+            net.save_checkpoint()
 
     def load_models(self):
         print('... loading models ...')
-        self.actor.load_checkpoint()
-        self.critic.load_checkpoint()
+        for net in self.networks:
+            net.load_checkpoint()
+
+    def _policy_value(self, states):
+        """Action distribution and value [B] (normalised if value_norm is on)."""
+        if self.model is not None:
+            return self.model(states)
+        return self.actor(states), self.critic(states).reshape(-1)
+
+    def _denorm(self, values):
+        if self.value_norm is None:
+            return values
+        mean, std = self.value_norm.stats()
+        return values * std + mean
 
     def act(self, observation):
         # no_grad: acting does not need gradients (the 2022 code built a graph at every step).
         # One stack + tolist = one GPU->CPU transfer instead of three .item() calls.
         with torch.no_grad():
-            state = observation.to(self.actor.device)
-            dist = self.actor(state)
-            value = self.critic(state)
+            state = observation.to(self.device)
+            dist, value = self._policy_value(state)
+            value = self._denorm(value)
             action = dist.sample()
             out = torch.stack([action.reshape(()).float(),
                                dist.log_prob(action).reshape(()),
@@ -66,12 +119,12 @@ class PPO_Agent:
         return int(out[0]), out[1], out[2]
 
     def act_batch(self, observations):
-        """Same as act() for a batch [N, 4, 64, 64] (several environments at once).
+        """Same as act() for a batch [N, C, 64, 64] (several environments at once).
         Returns numpy arrays: actions [N] int64, log-probs [N], values [N]."""
         with torch.no_grad():
-            states = torch.as_tensor(observations).to(self.actor.device, non_blocking=True)
-            dist = self.actor(states)
-            values = self.critic(states).reshape(-1)
+            states = torch.as_tensor(observations).to(self.device, non_blocking=True)
+            dist, values = self._policy_value(states)
+            values = self._denorm(values)
             actions = dist.sample()
             out = torch.stack([actions.float(), dist.log_prob(actions), values]).cpu().numpy()
         return out[0].astype(np.int64), out[1], out[2]
@@ -105,8 +158,9 @@ class PPO_Agent:
     def value(self, observations):
         """Critic value(s) V(s) as numpy, for one observation [1, 4, 64, 64] or a batch."""
         with torch.no_grad():
-            states = torch.as_tensor(observations).to(self.actor.device)
-            return self.critic(states).reshape(-1).cpu().numpy().astype(np.float64)
+            states = torch.as_tensor(observations).to(self.device)
+            _, values = self._policy_value(states)
+            return self._denorm(values).cpu().numpy().astype(np.float64)
 
     def learn(self, last_obs=None):
         """One PPO update on the rollout stored in self.memory (single environment).
@@ -129,13 +183,18 @@ class PPO_Agent:
         float64, advantages in float32). Only the data movement changed: the whole rollout is
         copied to the GPU once, instead of once per mini-batch (320 copies of 4 MB per rollout).
         """
-        device = self.actor.device
+        device = self.device
         n_states = len(state_arr)
         states_all = torch.as_tensor(state_arr).to(device)
         old_probs_all = torch.as_tensor(np.asarray(old_prob_arr, dtype=np.float64)).to(device)
         actions_all = torch.as_tensor(np.asarray(action_arr, dtype=np.int64)).to(device)
         advantage = torch.as_tensor(advantage).to(device)
         values = torch.as_tensor(np.asarray(vals_arr, dtype=np.float64)).to(device)
+        if self.value_norm is not None:
+            # update the running statistics with this rollout's value targets, then train the
+            # critic on targets normalised with them
+            self.value_norm.update((advantage.double() + values).cpu().numpy())
+            vn_mean, vn_std = self.value_norm.stats()
 
         actor_losses = []
         critic_losses = []
@@ -153,9 +212,7 @@ class PPO_Agent:
                 old_probs = old_probs_all[batch]
                 actions = actions_all[batch]
 
-                dist = self.actor(states)
-                critic_value = self.critic(states)
-                critic_value = torch.squeeze(critic_value)
+                dist, critic_value = self._policy_value(states)
 
                 new_probs = dist.log_prob(actions)
                 prob_ratio = new_probs.exp() / old_probs.exp()
@@ -172,6 +229,8 @@ class PPO_Agent:
                 actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
 
                 returns = advantage[batch] + values[batch]
+                if self.value_norm is not None:
+                    returns = (returns - vn_mean) / vn_std
 
                 # Critic loss
                 critic_loss = (returns - critic_value) ** 2
@@ -184,13 +243,12 @@ class PPO_Agent:
 
                 total_loss = actor_loss + 0.5 * critic_loss - self.ent_coef * entropy
 
-                self.actor.optimizer.zero_grad()
-                self.critic.optimizer.zero_grad()
+                for net in self.networks:
+                    net.optimizer.zero_grad()
                 total_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)  # MAX_GRAD_NORM
-                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
-                self.actor.optimizer.step()
-                self.critic.optimizer.step()
+                for net in self.networks:   # gradient norm clipped per network (2022: per network)
+                    torch.nn.utils.clip_grad_norm_(net.parameters(), self.max_grad_norm)
+                    net.optimizer.step()
 
                 # logged values, kept on the GPU and read once at the end (no sync per mini-batch)
                 actor_losses.append(actor_loss.detach())

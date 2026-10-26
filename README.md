@@ -86,6 +86,23 @@ their N actions in one batched network pass. The update is unchanged (2,048 tran
 steps. This changes the data the agent learns from, so it is compared against the reference like
 any other step. `--num-envs 1` (default) is the 2022 single-environment loop.
 
+### Tuned PPO presets
+
+```powershell
+scripts\run_seeds.bat -NumEnvs 16 -Preset tuned        -Name ppo_tuned        -Runs 3 -Steps 500000 -EvalInterval 50000
+scripts\run_seeds.bat -NumEnvs 16 -Preset tuned-resnet -Name ppo_tuned_resnet -Runs 3 -Steps 500000 -EvalInterval 50000
+```
+
+- `tuned`: the PPO settings of Moon et al. (2023): γ 0.95, λ 0.65, 4,096 transitions per update,
+  3 epochs × 8 mini-batches of 512, entropy bonus 0.01, the three correctness fixes, and colour
+  observations (one RGB frame) instead of 4 stacked grayscale frames. Network unchanged.
+- `tuned-resnet`: `tuned` + their network: a shared IMPALA ResNet encoder (channels 64/128/128,
+  dense 256 → 1024, layer normalisation, ~4M parameters, `networks/impala.py`) and normalised value
+  targets (`--value-norm 1`).
+
+Each part is also available on its own (`--gamma`, `--gae-lambda`, `--epochs`, `--minibatches`,
+`--rollout`, `--ent-coef`, `--rgb`, `--arch impala`, `--value-norm`), defaults = 2022 behaviour.
+
 Play the game yourself (useful to understand it): `pip install pygame-ce` once, then
 `python -m crafter.run_gui`.
 
