@@ -141,6 +141,7 @@ Results and plots:
 python analysis/crafter_score.py --logdir logdir --budget 1000000 --rates
 python analysis/learning_curve.py --logdir logdir/ppo_agent               # score / reward / length per 50k-step window
 python analysis/plot_eval_performance.py --logdir logdir/ppo_agent      # -> analysis/ppo_agent/*.png
+python analysis/watch_agent.py --run logdir/ppo_tuned_resnet_1M/1    # videos + causes of death -> <run>/watch/
 ```
 
 During training, a progress line is printed every 5,000 steps (`--log-every`):

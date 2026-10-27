@@ -5,6 +5,7 @@
 crafter>=1.8.3        # the game (pulls numpy, imageio, pillow, opensimplex, ruamel.yaml)
 numpy>=1.24
 imageio>=2.30
+imageio-ffmpeg>=0.5     # mp4 videos (analysis/watch_agent.py)
 pillow>=10.0
 numba>=0.60          # used automatically by opensimplex: world generation ~16x faster, same worlds
 
