@@ -252,10 +252,26 @@ def main_vec(opt):
     channels = venv.obs_channels
     agent = make_agent(opt, n_rollouts=opt.rollout, channels=channels)
 
+    # Achievement Distillation (--ad 1): auxiliary phase every --ad-policy-phases PPO updates,
+    # on a buffer of the rollouts collected since the previous one (agents/achievement_distillation.py)
+    ad = None
+    if opt.ad:
+        from agents.achievement_distillation import AchievementDistillation
+        ad = AchievementDistillation(agent.model, lr=opt.lr, temperature=opt.ad_temperature,
+                                     epochs=opt.ad_epochs, batch_size=opt.ad_batch)
+        ad_obs = np.zeros((opt.ad_policy_phases, n_steps, n_envs, channels, 64, 64), dtype=np.uint8)
+        ad_act = np.zeros((opt.ad_policy_phases, n_steps, n_envs), dtype=np.int64)
+        ad_rew = np.zeros((opt.ad_policy_phases, n_steps, n_envs), dtype=np.float32)
+        ad_done = np.zeros((opt.ad_policy_phases, n_steps, n_envs), dtype=bool)
+        ad_k = 0   # rollouts in the buffer
+
     actor_losses_log, critic_losses_log, total_losses_log, entropy_log = [], [], [], []
     step_cnt, ep_cnt, next_eval = 0, 0, opt.eval_interval
     if ckpt is not None:
         agent.load_training_state(ckpt["agent"])
+        if ad is not None and ckpt.get("ad") is not None:
+            ad.load_state_dict(ckpt["ad"]["module"])
+            ad.optimizer.load_state_dict(ckpt["ad"]["optimizer"])
         step_cnt, ep_cnt, next_eval = ckpt["step_cnt"], ckpt["ep_cnt"], ckpt["next_eval"]
         actor_losses_log, critic_losses_log, total_losses_log, entropy_log = ckpt["logs"]
         np.random.set_state(ckpt["numpy_rng"])
@@ -266,6 +282,7 @@ def main_vec(opt):
 
     def save_checkpoint():
         state = {"agent": agent.training_state(), "step_cnt": step_cnt, "ep_cnt": ep_cnt,
+                 "ad": None if ad is None else {"module": ad.state_dict(), "optimizer": ad.optimizer.state_dict()},
                  "next_eval": next_eval, "config": config,
                  "logs": (actor_losses_log, critic_losses_log, total_losses_log, entropy_log),
                  "numpy_rng": np.random.get_state(), "torch_rng": torch.get_rng_state()}
@@ -320,6 +337,26 @@ def main_vec(opt):
         entropy_log.append(agent.avg_entropy)
         save_training_logs(actor_losses_log, critic_losses_log, total_losses_log, opt.logdir)
         save_entropy_log(entropy_log, opt.logdir)
+
+        if ad is not None:
+            # keep this rollout (observations as uint8 to save memory: 8 x 4096 RGB frames ~ 0.4 GB)
+            ad_obs[ad_k] = np.round(states * 255)
+            ad_act[ad_k], ad_rew[ad_k], ad_done[ad_k] = actions, rewards, dones
+            ad_k += 1
+            if ad_k == opt.ad_policy_phases:
+                with progress.time("aux"):
+                    L = ad_k * n_steps   # rollouts laid end to end: one long trajectory per environment
+                    ad.auxiliary_phase(ad_obs.reshape(L, n_envs, channels, 64, 64),
+                                       np.round(obs * 255).astype(np.uint8),   # observation after the last step
+                                       ad_act.reshape(L, n_envs), ad_rew.reshape(L, n_envs),
+                                       ad_done.reshape(L, n_envs))
+                ad_k = 0
+                st = ad.last_stats
+                print(f"[{step_cnt}] aux phase: L_pred {st['aux_loss']:.3f}, prediction accuracy "
+                      f"{100 * st['pred_acc']:.1f}%, KL(pi_old||pi) {st.get('kl_old', float('nan')):.4f}, "
+                      f"{st['anchors']} anchor steps", flush=True)
+                with open(opt.logdir + "/ad_log.jsonl", "a") as f:
+                    f.write(json.dumps({"step": step_cnt, **st}) + "\n")
 
         if step_cnt >= next_eval:
             with progress.time("eval"):
@@ -441,21 +478,33 @@ def get_options():
     parser.add_argument("--arch", default="nature", choices=["nature", "impala"],
                         help="nature = 2022 networks (separate actor/critic CNNs); impala = shared ResNet (~4M params).")
     parser.add_argument("--value-norm", type=int, default=0, help="1 = critic learns normalised value targets.")
-    parser.add_argument("--preset", default=None, choices=["tuned", "tuned-resnet"],
+    parser.add_argument("--ad", type=int, default=0,
+                        help="1 = Achievement Distillation auxiliary phase (intra-trajectory prediction; needs --arch impala).")
+    parser.add_argument("--ad-policy-phases", type=int, default=8, help="PPO updates between auxiliary phases (paper: 8).")
+    parser.add_argument("--ad-epochs", type=int, default=6, help="Epochs over the buffer per auxiliary phase (paper: 6).")
+    parser.add_argument("--ad-temperature", type=float, default=0.1,
+                        help="Temperature of the contrastive loss (not given in the paper).")
+    parser.add_argument("--ad-batch", type=int, default=256, help="Anchor steps per auxiliary mini-batch.")
+    parser.add_argument("--preset", default=None, choices=["tuned", "tuned-resnet", "ad"],
                         help="tuned = PPO settings of Moon et al. 2023 (see README); tuned-resnet = tuned + "
-                             "IMPALA ResNet + value normalisation. Explicit flags are overridden.")
+                             "IMPALA ResNet + value normalisation; ad = tuned-resnet + Achievement Distillation. "
+                             "Explicit flags are overridden.")
     opt = parser.parse_args()
-    if opt.preset in ("tuned", "tuned-resnet"):
+    if opt.preset in ("tuned", "tuned-resnet", "ad"):
         # Moon et al. 2023, Table 3: gamma 0.95, lambda 0.65, 4096 steps per rollout, 3 epochs x 8
         # mini-batches, entropy 0.01; plus the correctness fixes and colour input without stacking.
         opt.gamma, opt.gae_lambda, opt.rollout, opt.epochs, opt.minibatches = 0.95, 0.65, 4096, 3, 8
         opt.ent_coef, opt.fixes, opt.rgb, opt.history_length = 0.01, 1, 1, 1
         opt.num_envs = max(opt.num_envs, 16)
-    if opt.preset == "tuned-resnet":
+    if opt.preset in ("tuned-resnet", "ad"):
         # the rest of Moon et al.'s recipe: larger shared ResNet with layer norm, value normalisation
         opt.arch, opt.value_norm = "impala", 1
+    if opt.preset == "ad":
+        opt.ad = 1
     if opt.resume:
         return opt   # settings come from the checkpoint (see main_vec)
+    if opt.ad and opt.arch != "impala":
+        parser.error("--ad 1 needs --arch impala (a shared encoder)")
     if opt.rgb and opt.num_envs <= 1:
         parser.error("--rgb / --preset need --num-envs > 1")
     return opt

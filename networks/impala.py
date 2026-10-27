@@ -73,10 +73,17 @@ class ImpalaActorCritic(nn.Module):
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.to(self.device)
 
+    def encode(self, state):
+        """Shared representation phi(s), 1024 features (used by Achievement Distillation)."""
+        return self.dense(self.encoder(state))
+
+    def heads(self, features):
+        """(action distribution, value [B]) from encoder features."""
+        return Categorical(logits=self.policy_head(features)), self.value_head(features).reshape(-1)
+
     def forward(self, state):
         """Returns (action distribution, value [B])."""
-        features = self.dense(self.encoder(state))
-        return Categorical(logits=self.policy_head(features)), self.value_head(features).reshape(-1)
+        return self.heads(self.encode(state))
 
     def save_checkpoint(self):
         os.makedirs(os.path.dirname(self.checkpoint_file), exist_ok=True)

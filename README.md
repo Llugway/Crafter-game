@@ -105,6 +105,7 @@ any other step. `--num-envs 1` (default) is the 2022 single-environment loop.
 ```powershell
 scripts\run_seeds.bat -NumEnvs 16 -Preset tuned        -Name ppo_tuned        -Runs 3 -Steps 500000 -EvalInterval 50000
 scripts\run_seeds.bat -NumEnvs 16 -Preset tuned-resnet -Name ppo_tuned_resnet -Runs 3 -Steps 500000 -EvalInterval 50000
+scripts\run_seeds.bat -NumEnvs 16 -Preset ad           -Name ppo_ad           -Runs 3 -Steps 500000 -EvalInterval 50000
 ```
 
 - `tuned`: the PPO settings of Moon et al. (2023): γ 0.95, λ 0.65, 4,096 transitions per update,
@@ -113,6 +114,13 @@ scripts\run_seeds.bat -NumEnvs 16 -Preset tuned-resnet -Name ppo_tuned_resnet -R
 - `tuned-resnet`: `tuned` + their network: a shared IMPALA ResNet encoder (channels 64/128/128,
   dense 256 → 1024, layer normalisation, ~4M parameters, `networks/impala.py`) and normalised value
   targets (`--value-norm 1`).
+- `ad`: `tuned-resnet` + Achievement Distillation (Moon et al. 2023), intra-trajectory part
+  (`agents/achievement_distillation.py`). Every 8 PPO updates, an auxiliary phase of 6 epochs over
+  those 8 rollouts trains the shared encoder to recognise, at each step, which achievement comes
+  next (contrastive loss), while a KL and a value term keep the policy and value where they were.
+  Logged in `ad_log.jsonl` (loss, prediction accuracy, KL). Flags: `--ad`, `--ad-policy-phases`,
+  `--ad-epochs`, `--ad-temperature` (not given in the paper, 0.1 here), `--ad-batch`.
+  Not implemented yet: cross-trajectory matching and achievement memory.
 
 Each part is also available on its own (`--gamma`, `--gae-lambda`, `--epochs`, `--minibatches`,
 `--rollout`, `--ent-coef`, `--rgb`, `--arch impala`, `--value-norm`), defaults = 2022 behaviour.
