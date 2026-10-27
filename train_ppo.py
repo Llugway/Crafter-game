@@ -185,6 +185,30 @@ def main(opt):
     save_entropy_log(entropy_log, opt.logdir)
 
 
+def _truncate_after_checkpoint(logdir, ep_cnt, step_cnt):
+    """On resume, keep only the episodes and evaluations recorded up to the checkpoint."""
+    path = logdir + "/stats.jsonl"
+    with open(path, encoding="utf-8") as f:
+        lines = f.readlines()
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(lines[:ep_cnt])
+    path = logdir + "/eval_stats.pkl"
+    try:
+        evals = []
+        with open(path, "rb") as f:
+            while True:
+                try:
+                    evals.append(pickle.load(f))
+                except EOFError:
+                    break
+        with open(path, "wb") as f:
+            for e in evals:
+                if e["step"] <= step_cnt:
+                    pickle.dump(e, f)
+    except FileNotFoundError:
+        pass
+
+
 def main_vec(opt):
     """PPO with several environments in parallel (--num-envs N > 1).
 
@@ -198,11 +222,25 @@ def main_vec(opt):
     import numpy as np
     from src.vec_env import VecCrafter, evaluate
 
-    _info(opt)
+    ckpt_path = os.path.join(opt.logdir, "checkpoint.pt")
+    ckpt = None
+    if opt.resume:
+        if not os.path.exists(ckpt_path):
+            raise SystemExit(f"--resume: no checkpoint at {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        # the run keeps its own settings; only the budget and the machine-related options change
+        keep = {"steps", "logdir", "num_workers", "log_every", "log_episodes", "resume", "checkpoint_every"}
+        for k, v in ckpt["config"].items():
+            if k not in keep:
+                setattr(opt, k, v)
+        print(f"Resuming {opt.logdir} from step {ckpt['step_cnt']:,} (checkpoint), up to {opt.steps:,} steps.")
+    else:
+        _info(opt)
     opt.device = torch.device("cpu")
     os.makedirs(opt.logdir, exist_ok=True)
+    config = {k: v for k, v in vars(opt).items() if k != "device"}
     with open(opt.logdir + "/config.json", "w") as f:   # every setting of this run, for the analysis
-        json.dump({k: v for k, v in vars(opt).items() if k != "device"}, f, indent=1)
+        json.dump(config, f, indent=1)
 
     n_envs = opt.num_envs
     n_steps = opt.rollout // n_envs  # steps per environment per rollout
@@ -214,11 +252,29 @@ def main_vec(opt):
     channels = venv.obs_channels
     agent = make_agent(opt, n_rollouts=opt.rollout, channels=channels)
 
-    stats_file = open(opt.logdir + "/stats.jsonl", "a")  # same format as crafter.Recorder
     actor_losses_log, critic_losses_log, total_losses_log, entropy_log = [], [], [], []
-    progress = Progress(opt.steps, every=opt.log_every, device=agent.device)
-    obs = venv.observations()
     step_cnt, ep_cnt, next_eval = 0, 0, opt.eval_interval
+    if ckpt is not None:
+        agent.load_training_state(ckpt["agent"])
+        step_cnt, ep_cnt, next_eval = ckpt["step_cnt"], ckpt["ep_cnt"], ckpt["next_eval"]
+        actor_losses_log, critic_losses_log, total_losses_log, entropy_log = ckpt["logs"]
+        np.random.set_state(ckpt["numpy_rng"])
+        torch.set_rng_state(ckpt["torch_rng"])
+        # drop what was written after the checkpoint (it will be played again)
+        _truncate_after_checkpoint(opt.logdir, ep_cnt, step_cnt)
+    next_ckpt = (step_cnt // opt.checkpoint_every + 1) * opt.checkpoint_every
+
+    def save_checkpoint():
+        state = {"agent": agent.training_state(), "step_cnt": step_cnt, "ep_cnt": ep_cnt,
+                 "next_eval": next_eval, "config": config,
+                 "logs": (actor_losses_log, critic_losses_log, total_losses_log, entropy_log),
+                 "numpy_rng": np.random.get_state(), "torch_rng": torch.get_rng_state()}
+        torch.save(state, ckpt_path + ".tmp")
+        os.replace(ckpt_path + ".tmp", ckpt_path)   # never leaves a half-written checkpoint
+
+    stats_file = open(opt.logdir + "/stats.jsonl", "a")  # same format as crafter.Recorder
+    progress = Progress(opt.steps - step_cnt, every=opt.log_every, device=agent.device)
+    obs = venv.observations()
     recent = []
 
     states = np.zeros((n_steps, n_envs, channels, 64, 64), dtype=np.float32)
@@ -274,9 +330,15 @@ def main_vec(opt):
                 _save_stats(returns, step_cnt, opt.logdir)
             next_eval += opt.eval_interval
 
+        if opt.checkpoint_every and step_cnt >= next_ckpt:
+            stats_file.flush()
+            save_checkpoint()
+            next_ckpt += opt.checkpoint_every
+
     progress.summary()
     venv.close()
     stats_file.close()
+    save_checkpoint()   # final state: the run can be extended later with --resume 1 --steps <more>
     print("Number of episodes : " + str(ep_cnt))
     agent.save_models()
     print("... saving logs...")
@@ -371,6 +433,11 @@ def get_options():
                         help="Mini-batches per epoch; batch size = rollout / minibatches (2022: 32 -> 64).")
     parser.add_argument("--rgb", type=int, default=0,
                         help="1 = colour observations instead of grayscale (needs --num-envs > 1).")
+    parser.add_argument("--resume", type=int, default=0,
+                        help="1 = continue the run in --logdir from its checkpoint.pt, up to --steps "
+                             "(the run's own settings are reloaded). Parallel-env runs only.")
+    parser.add_argument("--checkpoint-every", type=int, default=100_000,
+                        help="Save a full checkpoint (weights, optimizer, counters) every N steps; 0 = only at the end.")
     parser.add_argument("--arch", default="nature", choices=["nature", "impala"],
                         help="nature = 2022 networks (separate actor/critic CNNs); impala = shared ResNet (~4M params).")
     parser.add_argument("--value-norm", type=int, default=0, help="1 = critic learns normalised value targets.")
@@ -387,6 +454,8 @@ def get_options():
     if opt.preset == "tuned-resnet":
         # the rest of Moon et al.'s recipe: larger shared ResNet with layer norm, value normalisation
         opt.arch, opt.value_norm = "impala", 1
+    if opt.resume:
+        return opt   # settings come from the checkpoint (see main_vec)
     if opt.rgb and opt.num_envs <= 1:
         parser.error("--rgb / --preset need --num-envs > 1")
     return opt
@@ -394,7 +463,7 @@ def get_options():
 
 if __name__ == "__main__":
     options = get_options()
-    if options.num_envs > 1:
+    if options.num_envs > 1 or options.resume:
         main_vec(options)
     else:
         main(options)

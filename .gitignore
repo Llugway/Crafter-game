@@ -17,3 +17,7 @@ analysis/*/
 # OS
 .DS_Store
 Thumbs.db
+
+# full training checkpoints (~50 MB each): keep them local
+checkpoint.pt
+checkpoint.pt.tmp
