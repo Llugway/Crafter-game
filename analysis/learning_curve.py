@@ -33,6 +33,8 @@ def load_run(path):
 def windows(run, window, budget):
     rows = []
     for hi in range(window, budget + 1, window):
+        if run["ends"][-1] < hi:   # window not fully covered by this run (it stopped earlier)
+            break
         m = (run["ends"] > hi - window) & (run["ends"] <= hi)
         if m.sum() < 3:
             continue

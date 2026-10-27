@@ -24,6 +24,20 @@ episodes of the first million steps. Computed by `analysis/crafter_score.py` on 
 The best PPO run collects wood (59% of episodes) and places a table (31%), but almost never
 crafts tools (5%) and does not reach stone.
 
+## Progress (2026)
+
+Same protocol (official Crafter score over the first 1M steps, 3 runs each) unless noted.
+
+| Step | Change | Crafter score |
+|---|---|---|
+| Reference | 2022 PPO, 16 parallel environments | 2.9 – 3.0% |
+| `tuned` | PPO settings of Moon et al. (2023), colour input, fixes | 4.0 – 4.9% *(500k steps)* |
+| `tuned-resnet` | + IMPALA ResNet, layer norm, value normalisation | **11.5 / 15.0 / 15.2%** (mean 13.9%) |
+| *Published (pixels, 1M)* | PPO (Crafter paper) 4.6% · DreamerV3 14.8% · tuned PPO + ResNet (Moon et al.) 15.6% · human 50.5% | |
+
+Over its last 100k training steps the `tuned-resnet` agent scores about 22%, and its curve is
+still rising at 1M. Results and figures: `results/2026_*`.
+
 ## Installation (Windows, conda)
 
 The code runs natively on Windows: no Linux or WSL needed.
