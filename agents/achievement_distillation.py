@@ -70,12 +70,13 @@ def achievement_targets(rewards, dones, threshold=0.5):
 # ---------------------------------------------------------------------- the module ---
 class AchievementDistillation(nn.Module):
     def __init__(self, model, n_actions=17, dim=1024, hidden=1024, lr=3e-4, temperature=0.1,
-                 beta_pi=1.0, beta_v=1.0, epochs=6, batch_size=256, max_grad_norm=0.5):
+                 beta_pi=1.0, beta_v=1.0, epochs=6, batch_size=256, chunk=64, max_grad_norm=0.5):
         super().__init__()
         self.model = model                      # the shared ImpalaActorCritic
         self.n_actions = n_actions
         self.temperature, self.beta_pi, self.beta_v = temperature, beta_pi, beta_v
         self.epochs, self.batch_size, self.max_grad_norm = epochs, batch_size, max_grad_norm
+        self.chunk = chunk   # anchors per forward/backward pass (memory), see auxiliary_phase
         # FiLM action modulation and the psi head (2-layer MLPs, hidden size 1024)
         self.eta = nn.Sequential(nn.Linear(n_actions, hidden), nn.ReLU(), nn.Linear(hidden, dim))
         self.delta = nn.Sequential(nn.Linear(n_actions, hidden), nn.ReLU(), nn.Linear(hidden, dim))
@@ -131,40 +132,54 @@ class AchievementDistillation(nn.Module):
             order = rng.permutation(len(valid_t))
             for b in range(0, len(order), self.batch_size):
                 idx = order[b:b + self.batch_size]
-                t, e = valid_t[idx], valid_e[idx]
-                u = nxt[t, e]                                         # step of the next unlock
-                t_neg = rng.integers(s0[t, e], s1[t, e] + 1)          # random step, same episode
-                tt = torch.as_tensor(t, device=dev)
-                ee = torch.as_tensor(e, device=dev)
-                uu = torch.as_tensor(u, device=dev)
-                nn_ = torch.as_tensor(t_neg, device=dev)
-                B = len(idx)
-                batch = torch.cat([all_obs[tt, ee], all_obs[nn_, ee], all_obs[uu, ee], all_obs[uu + 1, ee]])
-                feats = self.model.encode(self._to_float(batch))
-                f_t, f_neg, f_u, f_u1 = feats[:B], feats[B:2 * B], feats[2 * B:3 * B], feats[3 * B:]
-
-                nu = F.normalize(f_u1 - f_u, dim=-1)                  # next-achievement embedding
-                psi_pos = self.psi(f_t, acts[tt, ee])
-                psi_neg = self.psi(f_neg, acts[nn_, ee])
-                logits = torch.stack([(psi_pos * nu).sum(-1), (psi_neg * nu).sum(-1)], 1) / self.temperature
-                l_pred = F.cross_entropy(logits, torch.zeros(B, dtype=torch.long, device=dev))
-
-                # regularisers on the anchor states: stay close to pi_old and V_old
-                dist, v = self.model.heads(f_t)
-                old = torch.log_softmax(old_logits[tt, ee], -1)
-                r_pi = (old.exp() * (old - dist.logits.log_softmax(-1))).sum(-1).mean()
-                r_v = 0.5 * ((v - old_values[tt, ee]) ** 2).mean()
-
-                loss = l_pred + self.beta_pi * r_pi + self.beta_v * r_v
                 self.optimizer.zero_grad()
-                loss.backward()
+                # the batch is processed in chunks of anchors, gradients added up: same update as
+                # one big batch, but the GPU only holds the activations of one chunk at a time
+                for c in range(0, len(idx), self.chunk):
+                    l_pred, r_pi, acc = self._chunk_loss(idx[c:c + self.chunk], len(idx), valid_t, valid_e,
+                                                         nxt, s0, s1, all_obs, acts, old_logits, old_values, rng)
+                    losses.append(l_pred)
+                    accs.append(acc)
+                    kls.append(r_pi)
                 nn.utils.clip_grad_norm_(self.parameters(), self.max_grad_norm)
                 self.optimizer.step()
-
-                losses.append(l_pred.detach())
-                accs.append((logits[:, 0] > logits[:, 1]).float().mean().detach())
-                kls.append(r_pi.detach())
         self.last_stats = {"aux_loss": torch.stack(losses).mean().item(),
                            "pred_acc": torch.stack(accs).mean().item(),
                            "kl_old": torch.stack(kls).mean().item(),
                            "anchors": int(len(valid_t))}
+        # give the memory back: other runs share the GPU
+        del all_obs, acts, old_logits, old_values
+        if dev.type == "cuda":
+            torch.cuda.empty_cache()
+
+    def _chunk_loss(self, idx, batch_len, valid_t, valid_e, nxt, s0, s1, all_obs, acts, old_logits, old_values, rng):
+        """Loss of a chunk of anchors, backpropagated with weight len(chunk) / batch_len."""
+        dev = self.device
+        t, e = valid_t[idx], valid_e[idx]
+        u = nxt[t, e]                                         # step of the next unlock
+        t_neg = rng.integers(s0[t, e], s1[t, e] + 1)          # random step, same episode
+        # many anchors head to the same unlock: encode each unlock (s_u, s_u+1) only once
+        unlocks, inverse = np.unique(np.stack([u, e], 1), axis=0, return_inverse=True)
+        inverse = inverse.reshape(-1)
+        tt, ee, nn_ = (torch.as_tensor(x, device=dev) for x in (t, e, t_neg))
+        uu, ue = (torch.as_tensor(unlocks[:, k], device=dev) for k in (0, 1))
+        B, U = len(idx), len(unlocks)
+        batch = torch.cat([all_obs[tt, ee], all_obs[nn_, ee], all_obs[uu, ue], all_obs[uu + 1, ue]])
+        feats = self.model.encode(self._to_float(batch))
+        f_t, f_neg, f_u, f_u1 = feats[:B], feats[B:2 * B], feats[2 * B:2 * B + U], feats[2 * B + U:]
+
+        nu = F.normalize(f_u1 - f_u, dim=-1)[torch.as_tensor(inverse, device=dev)]   # next-achievement embedding
+        psi_pos = self.psi(f_t, acts[tt, ee])
+        psi_neg = self.psi(f_neg, acts[nn_, ee])
+        logits = torch.stack([(psi_pos * nu).sum(-1), (psi_neg * nu).sum(-1)], 1) / self.temperature
+        l_pred = F.cross_entropy(logits, torch.zeros(B, dtype=torch.long, device=dev))
+
+        # regularisers on the anchor states: stay close to pi_old and V_old
+        dist, v = self.model.heads(f_t)
+        old = torch.log_softmax(old_logits[tt, ee], -1)
+        r_pi = (old.exp() * (old - dist.logits.log_softmax(-1))).sum(-1).mean()
+        r_v = 0.5 * ((v - old_values[tt, ee]) ** 2).mean()
+
+        loss = l_pred + self.beta_pi * r_pi + self.beta_v * r_v
+        (loss * B / batch_len).backward()
+        return l_pred.detach(), r_pi.detach(), (logits[:, 0] > logits[:, 1]).float().mean().detach()

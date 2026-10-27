@@ -258,7 +258,8 @@ def main_vec(opt):
     if opt.ad:
         from agents.achievement_distillation import AchievementDistillation
         ad = AchievementDistillation(agent.model, lr=opt.lr, temperature=opt.ad_temperature,
-                                     epochs=opt.ad_epochs, batch_size=opt.ad_batch)
+                                     epochs=opt.ad_epochs, batch_size=opt.ad_batch,
+                                     chunk=opt.ad_chunk)
         ad_obs = np.zeros((opt.ad_policy_phases, n_steps, n_envs, channels, 64, 64), dtype=np.uint8)
         ad_act = np.zeros((opt.ad_policy_phases, n_steps, n_envs), dtype=np.int64)
         ad_rew = np.zeros((opt.ad_policy_phases, n_steps, n_envs), dtype=np.float32)
@@ -485,6 +486,8 @@ def get_options():
     parser.add_argument("--ad-temperature", type=float, default=0.1,
                         help="Temperature of the contrastive loss (not given in the paper).")
     parser.add_argument("--ad-batch", type=int, default=256, help="Anchor steps per auxiliary mini-batch.")
+    parser.add_argument("--ad-chunk", type=int, default=64,
+                        help="Anchors per forward/backward pass inside a mini-batch (GPU memory only, same update).")
     parser.add_argument("--preset", default=None, choices=["tuned", "tuned-resnet", "ad"],
                         help="tuned = PPO settings of Moon et al. 2023 (see README); tuned-resnet = tuned + "
                              "IMPALA ResNet + value normalisation; ad = tuned-resnet + Achievement Distillation. "
