@@ -93,6 +93,22 @@ class PPO_Agent:
         for net in self.networks:
             net.load_checkpoint()
 
+    def training_state(self):
+        """Everything needed to continue training exactly where it stopped: network weights,
+        optimizer state (Adam's running moments) and value-normalisation statistics."""
+        return {
+            'networks': [net.state_dict() for net in self.networks],
+            'optimizers': [net.optimizer.state_dict() for net in self.networks],
+            'value_norm': None if self.value_norm is None else dict(vars(self.value_norm)),
+        }
+
+    def load_training_state(self, state):
+        for net, sd, opt_sd in zip(self.networks, state['networks'], state['optimizers']):
+            net.load_state_dict(sd)
+            net.optimizer.load_state_dict(opt_sd)
+        if self.value_norm is not None and state['value_norm'] is not None:
+            vars(self.value_norm).update(state['value_norm'])
+
     def _policy_value(self, states):
         """Action distribution and value [B] (normalised if value_norm is on)."""
         if self.model is not None:

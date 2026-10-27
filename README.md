@@ -103,6 +103,21 @@ scripts\run_seeds.bat -NumEnvs 16 -Preset tuned-resnet -Name ppo_tuned_resnet -R
 Each part is also available on its own (`--gamma`, `--gae-lambda`, `--epochs`, `--minibatches`,
 `--rollout`, `--ent-coef`, `--rgb`, `--arch impala`, `--value-norm`), defaults = 2022 behaviour.
 
+### Checkpoints and resuming (parallel-env runs)
+
+Every 100,000 steps (`--checkpoint-every`) and at the end, a run saves `checkpoint.pt` in its folder:
+network weights, optimizer state, value-normalisation statistics, step/episode counters and logs.
+A stopped or finished run can then continue up to a larger budget with its own settings:
+
+```powershell
+python train_ppo.py --resume 1 --logdir logdir/ppo_tuned_resnet/1 --steps 2000000
+scripts\run_seeds.bat -NumEnvs 16 -Name ppo_tuned_resnet -Resume 1 -Runs 3 -Steps 2000000
+```
+
+Episodes and evaluations recorded after the checkpoint are removed from `stats.jsonl` and
+`eval_stats.pkl` (they are played again), so the logs stay consistent. Episodes in progress at
+the checkpoint are not logged.
+
 Play the game yourself (useful to understand it): `pip install pygame-ce` once, then
 `python -m crafter.run_gui`.
 
